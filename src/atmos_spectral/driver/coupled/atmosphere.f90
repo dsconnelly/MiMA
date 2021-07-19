@@ -59,6 +59,9 @@ real,    allocatable, dimension(:,:,:,:,:) :: grid_tracers
 real,    allocatable, dimension(:,:,:    ) :: psg
 real,    allocatable, dimension(:,:,:,:  ) :: ug, vg, tg
 
+! arrays to write the inputs to the GW scheme, for training emulators
+real,    allocatable, dimension(:,:,:)     :: u_gwf, v_gwf, t_gwf
+
 real, allocatable, dimension(:,:    ) :: dt_psg, z_bot
 real, allocatable, dimension(:,:,:  ) :: dt_ug, dt_vg, dt_tg
 real, allocatable, dimension(:,:,:,:) :: dt_tracers
@@ -142,6 +145,9 @@ allocate (dt_vg        (is:ie, js:je, num_levels))
 allocate (dt_tg        (is:ie, js:je, num_levels))
 allocate (dt_tracers   (is:ie, js:je, num_levels, num_tracers ))
 allocate (z_bot        (is:ie, js:je))
+allocate (u_gwf        (is:ie, js:je, num_levels))
+allocate (v_gwf        (is:ie, js:je, num_levels))
+allocate (t_gwf        (is:ie, js:je, num_levels))
 
 p_half=0.; z_half=0.; p_full=0.; z_full=0.; wg_full=0.
 psg=0.; ug=0.; vg=0.; tg=0.; grid_tracers=0.
@@ -169,7 +175,7 @@ if(file_exist(trim(file))) then
     call read_data(trim(file), 'psg', psg(:,:,  nt), grid_domain, timelevel=nt)
     do ntr = 1,num_tracers
       tr_name = trim(tracer_attributes(ntr)%name)
-      call read_data(trim(file), trim(tr_name), grid_tracers(:,:,:,nt,ntr), grid_domain, timelevel=nt)      
+      call read_data(trim(file), trim(tr_name), grid_tracers(:,:,:,nt,ntr), grid_domain, timelevel=nt)
     enddo ! end loop over tracers
   enddo ! end loop over time levels
   call read_data(trim(file), 'wg_full', wg_full, grid_domain)
@@ -207,7 +213,7 @@ subroutine atmosphere_down(Time, frac_land, t_surf, albedo,                     
 
 type(time_type),      intent(in) :: Time
 real,                 intent(in),    dimension(:,:) :: frac_land, t_surf, albedo
-real,                 intent(in),    dimension(:,:) :: albedo_vis_dir, albedo_nir_dir, albedo_vis_dif, albedo_nir_dif 
+real,                 intent(in),    dimension(:,:) :: albedo_vis_dir, albedo_nir_dir, albedo_vis_dif, albedo_nir_dif
 real,                 intent(in),    dimension(:,:) :: rough_mom, u_star, b_star, q_star, dtau_du, dtau_dv
 real,                 intent(inout), dimension(:,:) :: tau_x, tau_y
 real,                 intent(out),   dimension(:,:) :: flux_sw, flux_sw_dir, flux_sw_dif, flux_sw_down_vis_dir
@@ -235,6 +241,10 @@ else
   Time_prev = Time - Time_step
 endif
 Time_next = Time + Time_step
+
+u_gwf = ug(:,:,:,previous)
+v_gwf = vg(:,:,:,previous)
+t_gwf = tg(:,:,:,previous)
 
 call mpp_clock_begin(phyclock)
 call spectral_physics_down(Time_prev, Time, Time_next, previous, current, p_half, p_full, z_half, z_full, psg,      &
@@ -296,7 +306,8 @@ endif
 call complete_robert_filter(tracer_attributes)
 
 call spectral_diagnostics(Time_next, psg(:,:,future), ug(:,:,:,future), vg(:,:,:,future), &
-                          tg(:,:,:,future), wg_full, grid_tracers(:,:,:,future,:))
+                          tg(:,:,:,future), wg_full, grid_tracers(:,:,:,future,:), &
+                          u_gwf, v_gwf, t_gwf)
 
 previous = current
 current  = future

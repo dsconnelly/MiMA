@@ -1,10 +1,17 @@
 #!/bin/csh -f
+
+source /share/apps/lmod/lmod/init/csh
+module purge
+module load intel/19.1.2
+module load netcdf-fortran/intel/4.5.3
+module load openmpi/intel/4.0.5
+
 #Minimal runscript for atmospheric dynamical cores
 set echo 
 #--------------------------------------------------------------------------------------------------------
 # define variables
-set platform  = nci                                   # A unique identifier for your platform
-set npes      = $PBS_NCPUS                            # number of processors
+set platform  = greene                                # A unique identifier for your platform
+set npes      = 8                                     # number of processors
 set template  = $cwd/../bin/mkmf.template.$platform   # path to template for your platform
 set mkmf      = $cwd/../bin/mkmf                      # path to executable mkmf
 set sourcedir = $cwd/../src                           # path to directory containing model source code
@@ -28,16 +35,12 @@ else
 endif	
 if ($add_flag) then
     set NETCDF_INC = `nc-config --includedir`
-    set NETCDF_LIB = `nc-config --libs`
+    set NETCDF_LIB = `nc-config --libdir`
     echo "NETCDF_INC: "$NETCDF_INC
     echo "NETCDF_LIB: "$NETCDF_LIB
 endif
 if ( ! -f $mppnccombine ) then
-  icc -O -o $mppnccombine -I$NETCDF_INC $NETCDF_LIB $cwd/../postprocessing/mppnccombine.c 
-endif
-if ($add_flag) then
-    set NETCDF_INC = `nc-config --fflags`
-    set NETCDF_LIB = `nc-config --flibs`
+  icc -O -o $mppnccombine -I$NETCDF_INC -L$NETCDF_LIB $cwd/../postprocessing/mppnccombine.c -lnetcdf
 endif
 if ($add_flag) then
     set NETCDF_INC = `nc-config --fflags`

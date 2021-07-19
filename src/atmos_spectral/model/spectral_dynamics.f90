@@ -71,6 +71,7 @@ character(len=128), parameter :: tagname = '$Name:  $'
 !===============================================================================================
 ! variables needed for diagnostics
 integer :: id_ps, id_u, id_v, id_t, id_vor, id_div, id_omega, id_wspd, id_slp, id_div9
+integer :: id_ugwf, id_vgwf, id_tgwf
 integer :: id_pres_full, id_pres_half, id_zfull, id_zhalf
 integer :: id_uu, id_vv, id_tt, id_omega_omega, id_uv, id_omega_t
 integer, allocatable, dimension(:) :: id_tr
@@ -571,12 +572,12 @@ else
   psg  (:,:,  2) = psg  (:,:,  1)
   do ntr = 1,num_tracers
     if(trim(tracer_attributes(ntr)%name) == 'sphum') then
-      if(specify_initial_conditions) then  
+      if(specify_initial_conditions) then
          !epg+ray: This loads in sphum from the file initial_conditions.nc
          if (.not.file_exist('INPUT/initial_conditions.nc')) then
             call error_mesg('spectral_initialize_fields','Could not find INPUT/initial_conditions.nc!',FATAL)
          endif
-         
+
          ! open up the netcdf file`
          ncid = ncopn('INPUT/initial_conditions.nc',NCNOWRIT,err)
          ! This array tells us the size of input variables.
@@ -584,8 +585,8 @@ else
          counts(2) = size(grid_tracers,2)
          counts(3) = size(grid_tracers,3)
          ! Allocate space to put the initial condition information, temporarily.
-         allocate(lmptmp(counts(1),counts(2),counts(3)))          
-         
+         allocate(lmptmp(counts(1),counts(2),counts(3)))
+
          ! load sphum, if it has been specified.  Otherwise write error and break.
          vid = ncvid(ncid,'sphum',err)
          if(err == 0) then
@@ -599,7 +600,7 @@ else
             call error_mesg('read_restart_or_do_coldstart','Could not find '//trim(tracer_attributes(ntr)%name)// &
                 'in initial_conditions.nc',FATAL)
          endif
-      else 
+      else
          grid_tracers(:,:,:,:,ntr) = initial_sphum
       endif
     else if(trim(tracer_attributes(ntr)%name) == 'mix_rat') then
@@ -1586,6 +1587,15 @@ id_zhalf   = register_diag_field(mod_name, &
 id_slp = register_diag_field(mod_name, &
       'slp',(/id_lon,id_lat/),       Time, 'sea level pressure',           'pascals')
 
+id_ugwf   = register_diag_field(mod_name, &
+      'u_gwf',   axes_3d_full,       Time, 'u for GWF calc',         'm/sec',      range=vrange)
+
+id_vgwf   = register_diag_field(mod_name, &
+      'v_gwf',   axes_3d_full,       Time, 'v for GWF calc',         'm/sec',      range=vrange)
+
+id_tgwf   = register_diag_field(mod_name, &
+      't_gwf',   axes_3d_full,       Time, 't for GWF calc',         'deg_k',      range=trange)
+
 if(id_slp > 0) then
   gamma = 0.006
   expf = rdgas*gamma/grav
@@ -1601,12 +1611,14 @@ enddo
 return
 end subroutine spectral_diagnostics_init
 !===================================================================================
-subroutine spectral_diagnostics(Time, p_surf, u_grid, v_grid, t_grid, wg_full, tr_grid)
+subroutine spectral_diagnostics(Time, p_surf, u_grid, v_grid, t_grid, wg_full, &
+    tr_grid, u_gwf, v_gwf, t_gwf)
 
 type(time_type), intent(in) :: Time
 real, intent(in), dimension(is:ie, js:je)                          :: p_surf
 real, intent(in), dimension(is:ie, js:je, num_levels)              :: u_grid, v_grid, t_grid, wg_full
 real, intent(in), dimension(is:ie, js:je, num_levels, num_tracers) :: tr_grid
+real, intent(in), dimension(is:ie, js:je, num_levels)              :: u_gwf, v_gwf, t_gwf
 
 real, dimension(is:ie, js:je, num_levels)   :: ln_p_full, p_full, z_full, work
 real, dimension(is:ie, js:je, num_levels+1) :: ln_p_half, p_half, z_half
@@ -1623,6 +1635,10 @@ if(id_vor > 0)    used = send_data(id_vor, vorg, Time)
 if(id_div > 0)    used = send_data(id_div, divg, Time)
 if(id_omega > 0)  used = send_data(id_omega, wg_full, Time)
 if(num_levels > 8 .and. id_div9 > 0) used = send_data(id_div9, divg(:,:,9), Time)
+
+if(id_ugwf > 0)   used = send_data(id_ugwf, u_gwf, Time)
+if(id_vgwf > 0)   used = send_data(id_vgwf, v_gwf, Time)
+if(id_tgwf > 0)   used = send_data(id_tgwf, t_gwf, Time)
 
 if(id_zfull > 0 .or. id_zhalf > 0) then
   call compute_pressures_and_heights(t_grid, p_surf, z_full, z_half, p_full, p_half)
