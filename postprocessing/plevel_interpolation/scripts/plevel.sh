@@ -83,9 +83,7 @@ fi
 
 # location of executable
 
-source /opt/modules/default/init/sh
-source /home/fms/local/ia64/v12/moduleloads.sh
-executable=$FMSLOCALPATH/PLEV.exe
+executable=$HOME/MiMA/postprocessing/plevel_interpolation/exec/plev.x
 if [ ! -x "$executable" ]; then
    echo "ERROR: executable does not exist"
    echo "       executable=$executable"

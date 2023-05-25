@@ -32,4 +32,6 @@ simple_jobscript*
 bin/mppnccombine.nyu
 bin/mppnccombine.greene
 
-.DS_Store
+*.DS_Store
+*.ipynb_checkpoints*
+*.x

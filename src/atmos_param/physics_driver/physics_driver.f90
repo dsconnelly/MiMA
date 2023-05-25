@@ -13,7 +13,7 @@ module physics_driver_mod
 !
 !    physics_driver_mod accesses the model's physics modules and
 !    obtains tendencies and boundary fluxes due to the physical
-!    processes that drive atmospheric time tendencies and supply 
+!    processes that drive atmospheric time tendencies and supply
 !    boundary forcing to the surface models.
 ! </OVERVIEW>
 ! <DESCRIPTION>
@@ -46,7 +46,7 @@ module physics_driver_mod
 !   <LOADER FLAG="">       </LOADER>
 !   <TESTPROGRAM NAME="">  </TESTPROGRAM>
 !   <BUG>                  </BUG>
-!   <NOTE> 
+!   <NOTE>
 !   </NOTE>
 !   <FUTURE> Deal with conservation of total energy?              </FUTURE>
 
@@ -64,6 +64,7 @@ use atmos_tracer_driver_mod, only: atmos_tracer_driver_init,    &
                                    atmos_tracer_driver_end
 use fms_mod,                 only: mpp_clock_id, mpp_clock_begin,   &
                                    mpp_clock_end, CLOCK_MODULE_DRIVER, &
+                                   CLOCK_ROUTINE, &
                                    MPP_CLOCK_SYNC,  fms_init,  &
                                    open_namelist_file, stdlog, &
                                    write_version_number, &
@@ -108,13 +109,13 @@ use radiation_driver_mod,    only: radiation_driver_init,    &
                                    atmos_input_dealloc,    &
                                    surface_dealloc, &
                                    radiation_driver_end
-  
+
 use cloud_spec_mod,          only: cloud_spec_init, cloud_spec, &
                                    cloud_spec_dealloc, cloud_spec_end
 
 use aerosol_mod,             only: aerosol_init, aerosol_driver, &
                                    aerosol_dealloc, aerosol_end
- 
+
 use radiative_gases_mod,     only: radiative_gases_init,   &
                                    define_radiative_gases, &
                                    radiative_gases_dealloc, &
@@ -123,6 +124,8 @@ use radiative_gases_mod,     only: radiative_gases_init,   &
 use damping_driver_mod,      only: damping_driver,      &
                                    damping_driver_init, &
                                    damping_driver_end
+
+use cg_drag_mod,             only: cg_drag_clock
 
 use grey_radiation_mod, only: grey_radiation_init, grey_radiation, grey_radiation_end
 
@@ -134,7 +137,7 @@ use rrtmg_lw_rad
 use rrtmg_sw_init
 use rrtmg_sw_rad
 use rrtm_radiation
-use rrtm_vars     
+use rrtm_vars
 !-----------------------------------------------------------------
 
 implicit none
@@ -143,7 +146,7 @@ private
 !---------------------------------------------------------------------
 !    physics_driver_mod accesses the model's physics modules and
 !    obtains tendencies and boundary fluxes due to the physical
-!    processes that drive atmospheric time tendencies and supply 
+!    processes that drive atmospheric time tendencies and supply
 !    boundary forcing to the surface models.
 !---------------------------------------------------------------------
 
@@ -184,7 +187,7 @@ end interface
 
 logical :: do_moist_processes = .true.
                                ! call moist_processes routines
-real    :: tau_diff = 3600.    ! time scale for smoothing diffusion 
+real    :: tau_diff = 3600.    ! time scale for smoothing diffusion
                                ! coefficients
 logical :: do_radiation = .false.
                                ! calculating radiative fluxes and
@@ -198,13 +201,13 @@ logical :: do_damping = .true.
 
 logical :: do_local_heating = .false.
 
-real    :: diff_min = 1.e-3    ! minimum value of a diffusion 
+real    :: diff_min = 1.e-3    ! minimum value of a diffusion
                                ! coefficient beneath which the
                                ! coefficient is reset to zero
 logical :: diffusion_smooth = .true.
-                               ! diffusion coefficients should be 
+                               ! diffusion coefficients should be
                                ! smoothed in time?
-logical :: do_netcdf_restart = .true.              
+logical :: do_netcdf_restart = .true.
 ! <NAMELIST NAME="physics_driver_nml">
 !  <DATA NAME="do_netcdf_restart" UNITS="" TYPE="logical" DIM="" DEFAULT=".true.">
 ! netcdf/native format restart file
@@ -217,16 +220,16 @@ logical :: do_netcdf_restart = .true.
 !call moist_processes routines
 !  </DATA>
 !  <DATA NAME="tau_diff" UNITS="" TYPE="real" DIM="" DEFAULT="3600.">
-!time scale for smoothing diffusion 
+!time scale for smoothing diffusion
 ! coefficients
 !  </DATA>
 !  <DATA NAME="diff_min" UNITS="" TYPE="real" DIM="" DEFAULT="1.e-3">
-!minimum value of a diffusion 
+!minimum value of a diffusion
 ! coefficient beneath which the
 ! coefficient is reset to zero
 !  </DATA>
 !  <DATA NAME="diffusion_smooth" UNITS="" TYPE="logical" DIM="" DEFAULT=".true.">
-!diffusion coefficients should be 
+!diffusion coefficients should be
 ! smoothed in time?
 !  </DATA>
 ! </NAMELIST>
@@ -245,7 +248,7 @@ namelist / physics_driver_nml / do_netcdf_restart, do_radiation, &
 
 public  surf_diff_type   ! defined in  vert_diff_driver_mod, republished
                          ! here
- 
+
 !---------------------------------------------------------------------
 !------- private data ------
 
@@ -258,12 +261,12 @@ public  surf_diff_type   ! defined in  vert_diff_driver_mod, republished
 !            used on the next step in vert_diff_down, necessitating
 !            its storage.
 !
-! version 2: adds pbltop as generated in vert_turb_driver_mod. This 
+! version 2: adds pbltop as generated in vert_turb_driver_mod. This
 !            variable is then used on the next timestep by topo_drag
-!            (called from damping_driver_mod), necessitating its 
+!            (called from damping_driver_mod), necessitating its
 !            storage.
 !
-! version 3: adds the diffusion coefficients which are passed to 
+! version 3: adds the diffusion coefficients which are passed to
 !            vert_diff_driver.  These diffusion are saved should
 !            smoothing of vertical diffusion coefficients be turned
 !            on.
@@ -272,21 +275,21 @@ public  surf_diff_type   ! defined in  vert_diff_driver_mod, republished
 !            or not the grid column is convecting. This diagnostic is
 !            needed by the entrain_module in vert_turb_driver.
 !
-! version 5: adds radturbten when strat_cloud_mod is active, adds 
+! version 5: adds radturbten when strat_cloud_mod is active, adds
 !            lw_tendency when edt_mod or entrain_mod is active.
 !
 !---------------------------------------------------------------------
 integer, dimension(5) :: restart_versions = (/ 1, 2, 3, 4, 5 /)
 
 !--------------------------------------------------------------------
-!    the following allocatable arrays are either used to hold physics 
+!    the following allocatable arrays are either used to hold physics
 !    data between timesteps when required, or hold physics data between
 !    physics_down and physics_up.
-!  
+!
 !    diff_cu_mo     contains contribution to difusion coefficient
-!                   coming from cu_mo_trans_mod (called from 
-!                   moist_processes in physics_driver_up) and then used 
-!                   as input on the next time step to vert_diff_down 
+!                   coming from cu_mo_trans_mod (called from
+!                   moist_processes in physics_driver_up) and then used
+!                   as input on the next time step to vert_diff_down
 !                   called in physics_driver_down.
 !    diff_t         vertical diffusion coefficient for temperature
 !                   which optionally may be time smoothed, meaning
@@ -304,17 +307,17 @@ integer, dimension(5) :: restart_versions = (/ 1, 2, 3, 4, 5 /)
 !                   radiation is not calculated on each step.
 !    pbltop         top of boundary layer obtained from vert_turb_driver
 !                   and then used on the next timestep in topo_drag_mod
-!                   called from damping_driver_down        
+!                   called from damping_driver_down
 !    convect        flag indicating whether convection is occurring in
 !                   a grid column. generated in physics_driver_up and
-!                   then used in vert_turb_driver called from 
+!                   then used in vert_turb_driver called from
 !                   physics_driver_down on the next step.
 !----------------------------------------------------------------------
 real,    dimension(:,:,:), allocatable :: diff_cu_mo, diff_t, diff_m
 real,    dimension(:,:,:), allocatable :: radturbten, lw_tendency
-real,    dimension(:,:)  , allocatable :: pbltop     
+real,    dimension(:,:)  , allocatable :: pbltop
 logical, dimension(:,:)  , allocatable :: convect
-   
+
 !---------------------------------------------------------------------
 !    internal timing clock variables:
 !---------------------------------------------------------------------
@@ -325,7 +328,7 @@ integer :: radiation_clock, damping_clock, turb_clock,   &
 !--------------------------------------------------------------------
 !    miscellaneous control variables:
 !---------------------------------------------------------------------
-logical   :: do_check_args = .true.   ! argument dimensions should 
+logical   :: do_check_args = .true.   ! argument dimensions should
                                       ! be checked ?
 logical   :: module_is_initialized = .false.
                                       ! module has been initialized ?
@@ -440,7 +443,7 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
 !                mask to remove points below ground
 !        kbot    present when running eta vertical coordinate,
 !                index of lowest model level above ground
-!   
+!
 !---------------------------------------------------------------------
 
 !---------------------------------------------------------------------
@@ -463,7 +466,7 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
 !       aerosol_family_names
 !              names associated with the activated aerosol
 !              families that will be seen by the radiation package
-!       id,jd,kd      model dimensions on the processor  
+!       id,jd,kd      model dimensions on the processor
 !       ierr          error code
 !       io            io status returned from an io call
 !       unit          unit number used for an i/ operation
@@ -474,11 +477,11 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
       if (module_is_initialized) return
 
 !---------------------------------------------------------------------
-!    verify that the modules used by this module that are not called 
+!    verify that the modules used by this module that are not called
 !    later in this subroutine have already been initialized.
 !---------------------------------------------------------------------
       call fms_init
- 
+
 !--------------------------------------------------------------------
 !    read namelist.
 !--------------------------------------------------------------------
@@ -510,12 +513,12 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
       call write_version_number (version, tagname)
       if (mpp_pe() == mpp_root_pe() ) &
                write(stdlog(), nml=physics_driver_nml)
- 
+
 !---------------------------------------------------------------------
 !    define the model dimensions on the local processor.
 !---------------------------------------------------------------------
-      id = size(lonb(:))-1 
-      jd = size(latb(:))-1 
+      id = size(lonb(:))-1
+      jd = size(latb(:))-1
       kd = size(trs,3)
       call get_number_tracers (MODEL_ATMOS, num_tracers=nt, &
                                num_prog=ntp)
@@ -523,7 +526,7 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
 !-----------------------------------------------------------------------
         call  moist_processes_init (id, jd, kd, lonb, latb, pref(:,1),&
                                     axes, Time)
-     
+
 !-----------------------------------------------------------------------
 !    initialize damping_driver_mod.
 !-----------------------------------------------------------------------
@@ -547,17 +550,17 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
 !    initialize cloud_spec_mod.
 !-----------------------------------------------------------------------
       call cloud_spec_init (pref, lonb, latb, axes, Time)
- 
+
 !-----------------------------------------------------------------------
-!    initialize aerosol_mod.     
+!    initialize aerosol_mod.
 !-----------------------------------------------------------------------
       call aerosol_init (lonb, latb, aerosol_names, aerosol_family_names)
- 
+
 !-----------------------------------------------------------------------
 !    initialize radiative_gases_mod.
 !-----------------------------------------------------------------------
       call radiative_gases_init (pref, latb, lonb)
- 
+
 !-----------------------------------------------------------------------
 !    initialize radiation_driver_mod.
 !-----------------------------------------------------------------------
@@ -578,7 +581,7 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
          call rrtmg_sw_ini(cp_air)
          call rrtm_radiation_init(axes,Time,id*jd,kd,lonb,latb)
       endif
-      
+
       if(do_local_heating) call local_heating_init(axes, Time)
 
 !-----------------------------------------------------------------------
@@ -599,6 +602,9 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
       damping_clock         =     &
                 mpp_clock_id( '   Physics_down: Damping',    &
                   grain=CLOCK_MODULE_DRIVER, flags = MPP_CLOCK_SYNC )
+      cg_drag_clock         =     &
+          mpp_clock_id('      Damping: GW drag', &
+              grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
       turb_clock            =      &
                 mpp_clock_id( '   Physics_down: Vert. Turb.', &
                   grain=CLOCK_MODULE_DRIVER, flags = MPP_CLOCK_SYNC )
@@ -625,7 +631,7 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
       allocate ( convect    (id, jd) )
       allocate ( radturbten (id, jd, kd))
       allocate ( lw_tendency(id, jd, kd))
-       
+
 !--------------------------------------------------------------------
 !    call read_restart_file to obtain initial values for the module
 !    variables.
@@ -670,7 +676,7 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
 !    physics_driver_down calculates "first pass" physics tendencies,
 !    associated with radiation, damping and turbulence, and obtains
 !    the vertical diffusion tendencies to be passed to the surface and
-!    used in the semi-implicit vertical diffusion calculation.    
+!    used in the semi-implicit vertical diffusion calculation.
 !  </DESCRIPTION>
 !  <TEMPLATE>
 !   call physics_driver_down (is, ie, js, je,                       &
@@ -748,7 +754,7 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
 !   multiple 3d tracer fields at previous time step
 !  </IN>
 !  <INOUT NAME="rd" TYPE="real">
-!   multiple 3d diagnostic tracer fields 
+!   multiple 3d diagnostic tracer fields
 !  </INOUT>
 !  <IN NAME="frac_land" TYPE="real">
 !   fraction of land coverage in a model grid point
@@ -810,7 +816,7 @@ real, dimension(:,:,:),  intent(out),  optional  :: diffm, difft
 !  <OUT NAME="gust" TYPE="real">
 !  </OUT>
 !  <INOUT NAME="Surf_diff" TYPE="surface_diffusion_type">
-!   Surface diffusion 
+!   Surface diffusion
 !  </INOUT>
 !  <IN NAME="kbot" TYPE="integer">
 !   OPTIONAL: present when running eta vertical coordinate,
@@ -898,21 +904,21 @@ real,dimension(:,:),     intent(out)            :: flux_sw,  &
                                                    flux_sw_down_total_dir, &
                                                    flux_sw_down_total_dif, &
                                                    flux_sw_vis, &
-                                                   flux_sw_vis_dir, & 
-                                                   flux_sw_vis_dif 
+                                                   flux_sw_vis_dir, &
+                                                   flux_sw_vis_dif
 type(surf_diff_type),    intent(inout)          :: Surf_diff
 real,dimension(:,:,:),   intent(in)   ,optional :: mask
 integer, dimension(:,:), intent(in)   ,optional :: kbot
 real,  dimension(:,:,:), intent(in)   ,optional :: diff_cum_mom
 logical, dimension(:,:), intent(in)   ,optional :: moist_convect
-real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft 
+real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 
 !-----------------------------------------------------------------------
 !   intent(in) variables:
 !
-!      is,ie,js,je    starting/ending subdomain i,j indices of data in 
+!      is,ie,js,je    starting/ending subdomain i,j indices of data in
 !                     the physics_window being integrated
-!      Time_prev      previous time, for variables um,vm,tm,qm,rm 
+!      Time_prev      previous time, for variables um,vm,tm,qm,rm
 !                     (time_type)
 !      Time           current time, for variables u,v,t,q,r  (time_type)
 !      Time_next      next time, used for diagnostics   (time_type)
@@ -930,7 +936,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !      q              specific humidity at current time step  kg / kg ]
 !      r              multiple 3d tracer fields at current time step
 !      um,vm          zonal and meridional wind at previous time step
-!      tm,qm          temperature and specific humidity at previous 
+!      tm,qm          temperature and specific humidity at previous
 !                     time step
 !      rm             multiple 3d tracer fields at previous time step
 !      frac_land
@@ -954,10 +960,10 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !      udt            zonal wind tendency [ m / s**2 ]
 !      vdt            meridional wind tendency [ m / s**2 ]
 !      tdt            temperature tendency [ deg k / sec ]
-!      qdt            specific humidity tendency 
+!      qdt            specific humidity tendency
 !                     [  kg vapor / kg air / sec ]
 !      rdt            multiple tracer tendencies [ unit / unit / sec ]
-!      rd             multiple 3d diagnostic tracer fields 
+!      rd             multiple 3d diagnostic tracer fields
 !                     [ unit / unit / sec ]
 !      Surf_diff      surface_diffusion_type variable
 !
@@ -991,7 +997,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 
       real, dimension(size(u,1),size(u,2),size(u,3)) :: diff_t_vert, &
                                                         diff_m_vert
-      real, dimension(size(u,1),size(u,2))           :: z_pbl 
+      real, dimension(size(u,1),size(u,2))           :: z_pbl
       type(aerosol_type)                             :: Aerosol
       type(cld_specification_type)                   :: Cld_spec
       type(radiative_gases_type)                     :: Rad_gases
@@ -1012,20 +1018,20 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !
 !      diff_t_vert     vertical diffusion coefficient for temperature
 !                      calculated on the current step
-!      diff_m_vert     vertical diffusion coefficient for momentum   
+!      diff_m_vert     vertical diffusion coefficient for momentum
 !                      calculated on the current step
 !      z_pbl           height of planetary boundary layer
 !      Aerosol         aerosol_type variable describing the aerosol
 !                      fields to be seen by the radiation package
 !      Cld_spec        cld_specification_type variable describing the
-!                      cloud field to be seen by the radiation package 
+!                      cloud field to be seen by the radiation package
 !      Rad_gases       radiative_gases_type variable describing the
-!                      radiatively-active gas distribution to be seen 
+!                      radiatively-active gas distribution to be seen
 !                      by the radiation package
 !      Atmos_input     atmos_input_type variable describing the atmos-
 !                      pheric state to be seen by the radiation package
 !      Surface         surface_type variable describing the surface
-!                      characteristics to be seen by the radiation 
+!                      characteristics to be seen by the radiation
 !                      package
 !      Radiation       rad_output_type variable containing the variables
 !                      output from the radiation package, for passage
@@ -1034,14 +1040,14 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !                      apply [ time_type ]
 !      Lsc_microphys   microphysics_type variable containing the micro-
 !                      physical characteristics of the large-scale
-!                      clouds to be seen by the radiation package 
+!                      clouds to be seen by the radiation package
 !      Meso_microphys  microphysics_type variable containing the micro-
 !                      physical characteristics of the mesoscale
-!                      clouds to be seen by the radiation package 
+!                      clouds to be seen by the radiation package
 !      Cell_microphys  microphysics_type variable containing the micro-
 !                      physical characteristics of the cell-scale
-!                      clouds to be seen by the radiation package 
-!      sec, day        second and day components of the time_type 
+!                      clouds to be seen by the radiation package
+!      sec, day        second and day components of the time_type
 !                      variable
 !      dt              model physics time step [ seconds ]
 !      alpha           ratio of physics time step to diffusion-smoothing
@@ -1050,7 +1056,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !                      to input to the radiation package ?
 !      need_clouds     need to obtain cloud data on this time step
 !                      to input to the radiation package ?
-!      need_gases      need to obtain radiative gas data on this time 
+!      need_gases      need to obtain radiative gas data on this time
 !                      step to input to the radiation package ?
 !      need_basic      need to obtain atmospheric state variables on
 !                      this time step to input to the radiation package?
@@ -1087,12 +1093,12 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !    pheric fields, and any needed inputs from other physics modules.
 !---------------------------------------------------------------------
       call mpp_clock_begin ( radiation_clock )
- 
+
 !----------------------------------------------------------------------
 !    call define_rad_times to obtain the time to be used in the rad-
-!    iation calculation (Rad_time) and to determine which, if any, 
-!    externally-supplied inputs to radiation_driver must be obtained on 
-!    this timestep.  logical flags are returned indicating the need or 
+!    iation calculation (Rad_time) and to determine which, if any,
+!    externally-supplied inputs to radiation_driver must be obtained on
+!    this timestep.  logical flags are returned indicating the need or
 !    lack of need for the aerosol fields, the cloud fields, the rad-
 !    iative gas fields, and the basic atmospheric variable fields.
 !----------------------------------------------------------------------
@@ -1112,11 +1118,11 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 
 !---------------------------------------------------------------------
 !    if the basic atmospheric input variables to the radiation package
-!    are needed, pass the model pressure (p_full, p_half), temperature 
+!    are needed, pass the model pressure (p_full, p_half), temperature
 !    (t, t_surf_rad) and specific humidity (q) to subroutine
 !    define_atmos_input_fields, which will put these fields and some
 !    additional auxiliary fields into the form desired by the radiation
-!    package and store them as components of the derived-type variable 
+!    package and store them as components of the derived-type variable
 !    Atmos_input.
 !---------------------------------------------------------------------
       if (need_basic) then
@@ -1127,20 +1133,20 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 
 !---------------------------------------------------------------------
 !    if the aerosol fields are needed as input to the radiation_package,
-!    call aerosol_driver to access the aerosol data and place it into 
+!    call aerosol_driver to access the aerosol data and place it into
 !    an aerosol_type derived-type variable Aerosol.
 !---------------------------------------------------------------------
       if (need_aerosols) then
         call aerosol_driver (is, js, Rad_time, Atmos_input%pflux, &
                              Aerosol)
       endif
- 
+
 !---------------------------------------------------------------------
 !    if the cloud fields are needed, call cloud_spec to retrieve bulk
-!    cloud data and place it into a cld_specification_type derived-type 
+!    cloud data and place it into a cld_specification_type derived-type
 !    variable Cld_spec and retrieve microphysical data which is returned
-!    in microphysics_type variables Lsc_microphys, Meso_microphys and 
-!    Cell_microphys, when applicable. 
+!    in microphysics_type variables Lsc_microphys, Meso_microphys and
+!    Cell_microphys, when applicable.
 !---------------------------------------------------------------------
       if (need_clouds) then
         if (present(kbot) ) then
@@ -1160,8 +1166,8 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
       endif
 
 !---------------------------------------------------------------------
-!    if the radiative gases are needed, call define_radiative_gases to 
-!    obtain the values to be used for the radiatively-active gases and 
+!    if the radiative gases are needed, call define_radiative_gases to
+!    obtain the values to be used for the radiatively-active gases and
 !    place them in radiative_gases_type derived-type variable Rad_gases.
 !---------------------------------------------------------------------
       if (need_gases) then
@@ -1199,9 +1205,9 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
       !                       Radiation=Radiation, mask=mask, kbot=kbot)
 
 !-------------------------------------------------------------------
-!    process the variables returned from radiation_driver_mod. the 
+!    process the variables returned from radiation_driver_mod. the
 !    radiative heating rate is added to the accumulated physics heating
-!    rate (tdt). net surface lw and sw fluxes and the cosine of the 
+!    rate (tdt). net surface lw and sw fluxes and the cosine of the
 !    zenith angle are placed in locations where they can be exported
 !    for use in other component models. the lw heating rate is stored
 !    in a module variable for potential use in other physics modules.
@@ -1227,7 +1233,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
                                    Radiation%tdt_rad(:,:,:)
 
 !--------------------------------------------------------------------
-!    deallocate the arrays used to return the radiation_driver_mod 
+!    deallocate the arrays used to return the radiation_driver_mod
 !    output.
 !--------------------------------------------------------------------
       deallocate ( Radiation%tdt_rad      )
@@ -1244,9 +1250,9 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
       deallocate ( Radiation%flux_lw_surf )
       deallocate ( Radiation%coszen_angle )
       deallocate ( Radiation%tdtlw        )
- 
+
 !---------------------------------------------------------------------
-!    call routines to deallocate the components of the derived type 
+!    call routines to deallocate the components of the derived type
 !    arrays input to radiation_driver.
 !---------------------------------------------------------------------
       if (need_gases) then
@@ -1298,9 +1304,9 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 
 !----------------------------------------------------------------------
 !    call damping_driver to calculate the various model dampings that
-!    are desired. 
+!    are desired.
 !----------------------------------------------------------------------
-      z_pbl(:,:) = pbltop(is:ie,js:je) 
+      z_pbl(:,:) = pbltop(is:ie,js:je)
       if(do_damping) then
         call mpp_clock_begin ( damping_clock )
         call damping_driver (is, js, lat, Time_next, dt,           &
@@ -1320,7 +1326,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
           convect(is:ie,js:je) = moist_convect
         else
           call error_mesg('physics_driver_down', &
-          'moist_convect be present when do_moist_processes=.false.',FATAL) 
+          'moist_convect be present when do_moist_processes=.false.',FATAL)
         endif
       endif
 
@@ -1342,7 +1348,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
      call mpp_clock_end ( turb_clock )
      pbltop(is:ie,js:je) = z_pbl(:,:)
 
-     
+
 !-----------------------------------------------------------------------
 !    process any tracer fields.
 !-----------------------------------------------------------------------
@@ -1361,7 +1367,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !-----------------------------------------------------------------------
       if(.not.do_moist_processes) then
         if(present(diff_cum_mom)) then
-          diff_cu_mo(is:ie,js:je,:) = diff_cum_mom          
+          diff_cu_mo(is:ie,js:je,:) = diff_cum_mom
         else
           call error_mesg('physics_driver_down', &
           'diff_cum_mom must be present when do_moist_processes=.false.',FATAL)
@@ -1369,7 +1375,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
       endif
 
 !-----------------------------------------------------------------------
-!    optionally use an implicit calculation of the vertical diffusion 
+!    optionally use an implicit calculation of the vertical diffusion
 !    coefficients.
 !
 !    the vertical diffusion coefficients are solved using an implicit
@@ -1378,7 +1384,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !    dK/dt   = - ( K - K_cur) / tau_diff
 !
 !    where K         = diffusion coefficient
-!          K_cur     = diffusion coefficient diagnosed from current 
+!          K_cur     = diffusion coefficient diagnosed from current
 !                      time steps' state
 !          tau_diff  = time scale for adjustment
 !
@@ -1431,7 +1437,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
       if (present(diffm)) then
         diffm = diff_m(is:ie,js:je,:)
       endif
-      
+
      call mpp_clock_end ( diff_down_clock )
 
  end subroutine physics_driver_down
@@ -1441,18 +1447,18 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !#######################################################################
 ! <SUBROUTINE NAME="physics_driver_up">
 !  <OVERVIEW>
-!    physics_driver_up completes the calculation of vertical diffusion 
+!    physics_driver_up completes the calculation of vertical diffusion
 !    and also handles moist physical processes.
 !  </OVERVIEW>
 !  <DESCRIPTION>
-!    physics_driver_up completes the calculation of vertical diffusion 
+!    physics_driver_up completes the calculation of vertical diffusion
 !    and also handles moist physical processes.
 !  </DESCRIPTION>
 !  <TEMPLATE>
 !   call physics_driver_up (is, ie, js, je,                    &
 !                               Time_prev, Time, Time_next,        &
 !                               lat, lon, area,                    &
-!                               p_half, p_full, z_half, z_full,    & 
+!                               p_half, p_full, z_half, z_full,    &
 !                               omega,                             &
 !                               u, v, t, q, r, um, vm, tm, qm, rm, &
 !                               frac_land,                         &
@@ -1549,7 +1555,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
 !  <OUT NAME="gust" TYPE="real">
 !  </OUT>
 !  <INOUT NAME="Surf_diff" TYPE="surface_diffusion_type">
-!   Surface diffusion 
+!   Surface diffusion
 !  </INOUT>
 !  <IN NAME="kbot" TYPE="integer">
 !   OPTIONAL: present when running eta vertical coordinate,
@@ -1564,7 +1570,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
  subroutine physics_driver_up (is, ie, js, je,                    &
                                Time_prev, Time, Time_next,        &
                                lat, lon, area,                    &
-                               p_half, p_full, z_half, z_full,    & 
+                               p_half, p_full, z_half, z_full,    &
                                omega,                             &
                                u, v, t, q, r, um, vm, tm, qm, rm, &
                                frac_land,                         &
@@ -1574,7 +1580,7 @@ real,  dimension(:,:,:), intent(out)  ,optional :: diffm, difft
                                mask, kbot                         )
 
 !----------------------------------------------------------------------
-!    physics_driver_up completes the calculation of vertical diffusion 
+!    physics_driver_up completes the calculation of vertical diffusion
 !    and also handles moist physical processes.
 !---------------------------------------------------------------------
 
@@ -1600,9 +1606,9 @@ integer,dimension(:,:), intent(in),   optional :: kbot
 !-----------------------------------------------------------------------
 !   intent(in) variables:
 !
-!      is,ie,js,je    starting/ending subdomain i,j indices of data in 
+!      is,ie,js,je    starting/ending subdomain i,j indices of data in
 !                     the physics_window being integrated
-!      Time_prev      previous time, for variables um,vm,tm,qm,rm 
+!      Time_prev      previous time, for variables um,vm,tm,qm,rm
 !                     (time_type)
 !      Time           current time, for variables u,v,t,q,r  (time_type)
 !      Time_next      next time, used for diagnostics   (time_type)
@@ -1621,7 +1627,7 @@ integer,dimension(:,:), intent(in),   optional :: kbot
 !      q              specific humidity at current time step  kg / kg ]
 !      r              multiple 3d tracer fields at current time step
 !      um,vm          zonal and meridional wind at previous time step
-!      tm,qm          temperature and specific humidity at previous 
+!      tm,qm          temperature and specific humidity at previous
 !                     time step
 !      rm             multiple 3d tracer fields at previous time step
 !      frac_land
@@ -1641,7 +1647,7 @@ integer,dimension(:,:), intent(in),   optional :: kbot
 !      udt            zonal wind tendency [ m / s**2 ]
 !      vdt            meridional wind tendency [ m / s**2 ]
 !      tdt            temperature tendency [ deg k / sec ]
-!      qdt            specific humidity tendency 
+!      qdt            specific humidity tendency
 !                     [  kg vapor / kg air / sec ]
 !      rdt            multiple tracer tendencies [ unit / unit / sec ]
 !      Surf_diff      surface_diffusion_type variable
@@ -1649,8 +1655,8 @@ integer,dimension(:,:), intent(in),   optional :: kbot
 !
 !   intent(out) variables:
 !
-!      lprec     
-!      fprec       
+!      lprec
+!      fprec
 !
 !   intent(in), optional variables:
 !
@@ -1660,7 +1666,7 @@ integer,dimension(:,:), intent(in),   optional :: kbot
 !                   note:  both mask and kbot must be present together.
 !
 !--------------------------------------------------------------------
- 
+
 !--------------------------------------------------------------------
 !   local variables:
 
@@ -1668,14 +1674,14 @@ integer,dimension(:,:), intent(in),   optional :: kbot
       real, dimension(size(u,1), size(u,2))            :: gust_cv
       integer :: sec, day
       real    :: dt
-   
+
 !---------------------------------------------------------------------
 !   local variables:
 !
-!        diff_cu_mo_loc   diffusion coefficient contribution due to 
+!        diff_cu_mo_loc   diffusion coefficient contribution due to
 !                         cumulus momentum transport
 !        gust_cv
-!        sec, day         second and day components of the time_type 
+!        sec, day         second and day components of the time_type
 !                         variable
 !        dt               physics time step [ seconds ]
 !
@@ -1709,7 +1715,7 @@ integer,dimension(:,:), intent(in),   optional :: kbot
 
 !-----------------------------------------------------------------------
 !    if the fms integration path is being followed, call moist processes
-!    to compute moist physics, including convection and processes 
+!    to compute moist physics, including convection and processes
 !    involving condenstion.
 !-----------------------------------------------------------------------
       if (do_moist_processes) then
@@ -1727,7 +1733,7 @@ integer,dimension(:,:), intent(in),   optional :: kbot
         radturbten(is:ie,js:je,:) = 0.0
 
 !---------------------------------------------------------------------
-!    add the convective gustiness effect to that previously obtained 
+!    add the convective gustiness effect to that previously obtained
 !    from non-convective parameterizations.
 !---------------------------------------------------------------------
         gust = sqrt( gust*gust + gust_cv*gust_cv)
@@ -1765,7 +1771,7 @@ type(time_type), intent(in) :: Time
 
 !--------------------------------------------------------------------
 !   intent(in) variables:
-! 
+!
 !      Time      current time [ time_type(days, seconds) ]
 !
 !--------------------------------------------------------------------
@@ -1789,17 +1795,17 @@ type(time_type), intent(in) :: Time
             call error_mesg('physics_driver_mod', 'Writing netCDF formatted restart file: RESTART/physics_driver.res.nc', NOTE)
          endif
          call write_data(fname, 'vers', real(restart_versions(size(restart_versions(:)))), no_domain =.true. )
-         if(doing_strat()) then 
+         if(doing_strat()) then
             call write_data(fname, 'doing_strat', 1.0, no_domain=.true.)
          else
             call write_data(fname, 'doing_strat', 0.0, no_domain=.true.)
          endif
-         if(doing_edt) then 
+         if(doing_edt) then
             call write_data(fname, 'doing_edt', 1.0, no_domain=.true.)
          else
             call write_data(fname, 'doing_edt', 0.0, no_domain=.true.)
          endif
-         if(doing_entrain) then 
+         if(doing_entrain) then
             call write_data(fname, 'doing_entrain', 1.0, no_domain=.true.)
          else
             call write_data(fname, 'doing_entrain', 0.0, no_domain=.true.)
@@ -1830,7 +1836,7 @@ type(time_type), intent(in) :: Time
          !    open a unit for the restart file.
          !---------------------------------------------------------------------
          unit = open_restart_file ('RESTART/physics_driver.res', 'write')
-         
+
          !---------------------------------------------------------------------
          !    write the header records, indicating restart version number and
          !    which variables fields are present.
@@ -1839,7 +1845,7 @@ type(time_type), intent(in) :: Time
             write (unit) restart_versions(size(restart_versions(:)))
             write (unit) doing_strat(), doing_edt, doing_entrain
          endif
-         
+
          !--------------------------------------------------------------------
          !    write out the data fields that are relevant for this experiment.
          !--------------------------------------------------------------------
@@ -1854,7 +1860,7 @@ type(time_type), intent(in) :: Time
          if (doing_edt .or. doing_entrain) then
             call write_data (unit, lw_tendency)
          endif
-         
+
          !--------------------------------------------------------------------
          !    close the restart file unit.
          !--------------------------------------------------------------------
@@ -1883,7 +1889,7 @@ type(time_type), intent(in) :: Time
 !---------------------------------------------------------------------
       deallocate (diff_cu_mo, diff_t, diff_m, pbltop, convect,   &
                   radturbten, lw_tendency)
- 
+
 !---------------------------------------------------------------------
 !    mark the module as uninitialized.
 !---------------------------------------------------------------------
@@ -1924,13 +1930,13 @@ logical :: do_moist_in_phys_up
         call error_mesg ('do_moist_in_phys_up',  &
               'module has not been initialized', FATAL)
       endif
- 
+
 !-------------------------------------------------------------------
 !    define output variable.
 !-------------------------------------------------------------------
       do_moist_in_phys_up = do_moist_processes
 
- 
+
 end function do_moist_in_phys_up
 
 !#####################################################################
@@ -2014,9 +2020,9 @@ end subroutine zero_radturbten
 !                    PRIVATE SUBROUTINES
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-          
-               
-     
+
+
+
 !#####################################################################
 ! <SUBROUTINE NAME="read_restart_file">
 !  <OVERVIEW>
@@ -2034,7 +2040,7 @@ end subroutine zero_radturbten
 !  </TEMPLATE>
 ! </SUBROUTINE>
 !
-subroutine read_restart_file                                     
+subroutine read_restart_file
 
 !---------------------------------------------------------------------
 !    read_restart_file will read the physics_driver.res file and process
@@ -2057,11 +2063,11 @@ subroutine read_restart_file
 !      ierr              error code
 !      io                error status returned from i/o operation
 !      unit              io unit number for reading restart file
-!      vers              restart version number if that is contained in 
-!                        file; otherwise the first word of first data 
+!      vers              restart version number if that is contained in
+!                        file; otherwise the first word of first data
 !                        record of file
 !      vers2             second word of first data record of file
-!      was_doing_strat   logical indicating if strat_cloud_mod was 
+!      was_doing_strat   logical indicating if strat_cloud_mod was
 !                        active in job which wrote restart file
 !      was_doing_edt     logical indicating if edt_mod was active
 !                        in job which wrote restart file
@@ -2074,7 +2080,7 @@ subroutine read_restart_file
 
 !--------------------------------------------------------------------
 !    obtain values for radturbten, either from physics_driver.res, if
-!    reading a newer version of the file which contains it, or from 
+!    reading a newer version of the file which contains it, or from
 !    strat_cloud.res when an older version of physics_driver.res is
 !    being read.
 !--------------------------------------------------------------------
@@ -2128,7 +2134,7 @@ subroutine read_restart_file
         else
           diff_t = 0.0
           diff_m = 0.0
-        end if 
+        end if
 
 !---------------------------------------------------------------------
 !    a flag indicating columns in which convection is occurring is
@@ -2138,7 +2144,7 @@ subroutine read_restart_file
           call read_data (unit, convect)
         else
           convect = .false.
-        end if 
+        end if
 
 !---------------------------------------------------------------------
 !    radturbten may be present in versions 5 onward, if strat_cloud_mod
@@ -2153,9 +2159,9 @@ subroutine read_restart_file
             call read_data (unit, radturbten)
 
 !---------------------------------------------------------------------
-!    if strat_cloud_mod was not active in the job which wrote the 
+!    if strat_cloud_mod was not active in the job which wrote the
 !    restart file but it is active in the current job, initialize
-!    radturbten to 0.0 and put a message in the output file.  
+!    radturbten to 0.0 and put a message in the output file.
 !---------------------------------------------------------------------
           else
             if (doing_strat()) then
@@ -2175,7 +2181,7 @@ subroutine read_restart_file
 !---------------------------------------------------------------------
 !    if edt_mod or entrain_mod was not active in the job which wrote the
 !    restart file but it is active in the current job, initialize
-!    lw_tendency to 0.0 and put a message in the output file.  
+!    lw_tendency to 0.0 and put a message in the output file.
 !---------------------------------------------------------------------
           else
             if (doing_edt .or. doing_entrain) then
@@ -2188,7 +2194,7 @@ subroutine read_restart_file
 
 !---------------------------------------------------------------------
 !    close the io unit associated with physics_driver.res. set flag
-!    to indicate that the restart data has been processed. 
+!    to indicate that the restart data has been processed.
 !---------------------------------------------------------------------
           call close_file (unit)
           success = .true.
@@ -2208,7 +2214,7 @@ subroutine read_restart_file
 
 !--------------------------------------------------------------------
 !    if a version of physics_driver.res containing the needed data is
-!    not present, check for the presence of the radturbten data in 
+!    not present, check for the presence of the radturbten data in
 !    strat_cloud.res.
 !--------------------------------------------------------------------
       if ( .not. success) then
@@ -2218,7 +2224,7 @@ subroutine read_restart_file
             read (unit, iostat=io, err=142) vers, vers2
 
 !----------------------------------------------------------------------
-!    if an i/o error does not occur, then the strat_cloud.res file 
+!    if an i/o error does not occur, then the strat_cloud.res file
 !    contains the variable radturbten. rewind and read. close file upon
 !    completion.
 !----------------------------------------------------------------------
@@ -2264,8 +2270,8 @@ subroutine read_restart_file
             read (unit, iostat=io, err=143) vers, vers2
 
 !----------------------------------------------------------------------
-!    if an i/o error does not occur, then the edt.res file 
-!    contains the variable lw_tendency. rewind and read. close file 
+!    if an i/o error does not occur, then the edt.res file
+!    contains the variable lw_tendency. rewind and read. close file
 !    upon completion.
 !----------------------------------------------------------------------
 143         continue
@@ -2278,7 +2284,7 @@ subroutine read_restart_file
               call close_file (unit)
 
 !---------------------------------------------------------------------
-!    if the eor was reached (io /= 0), then the edt.res file 
+!    if the eor was reached (io /= 0), then the edt.res file
 !    does not contain the lw_tendency data.  set values to 0.0 and
 !    put a note in the output file.
 !---------------------------------------------------------------------
@@ -2327,7 +2333,7 @@ subroutine read_restart_file
 !----------------------------------------------------------------------
 
 
- end subroutine read_restart_file     
+ end subroutine read_restart_file
 
 !#####################################################################
 ! <SUBROUTINE NAME="read_restart_nc">
@@ -2366,11 +2372,11 @@ subroutine read_restart_nc
 !--------------------------------------------------------------------
 !   local variables:
 !
-!      vers              restart version number if that is contained in 
-!                        file; otherwise the first word of first data 
+!      vers              restart version number if that is contained in
+!                        file; otherwise the first word of first data
 !                        record of file
 !      vers2             second word of first data record of file
-!      was_doing_strat   logical indicating if strat_cloud_mod was 
+!      was_doing_strat   logical indicating if strat_cloud_mod was
 !                        active in job which wrote restart file
 !      was_doing_edt     logical indicating if edt_mod was active
 !                        in job which wrote restart file
@@ -2379,8 +2385,8 @@ subroutine read_restart_nc
 !      success           logical indicating that restart data has been
 !                        processed
 !
-!---------------------------------------------------------------------      
-                    
+!---------------------------------------------------------------------
+
       if(file_exist(fname)) then
          if(mpp_pe() == mpp_root_pe()) call mpp_error ('physics_driver_mod', &
             'Reading NetCDF formatted restart file: INPUT/physics_driver.res.nc', NOTE)
@@ -2393,7 +2399,7 @@ subroutine read_restart_nc
 !    momentum transport.
 !---------------------------------------------------------------------
          call read_data (fname, 'diff_cu_mo', diff_cu_mo)
-         
+
 !---------------------------------------------------------------------
 !    pbl top is present in file versions 2 and up. if not present,
 !    set a flag.
@@ -2414,10 +2420,10 @@ subroutine read_restart_nc
          convect = .false.
          r_convect = 0.
          call read_data (fname, 'convect', r_convect)
-         where(r_convect .GT. 0.) 
+         where(r_convect .GT. 0.)
             convect = .true.
          end where
-         
+
 !---------------------------------------------------------------------
 !    radturbten may be present in versions 5 onward, if strat_cloud_mod
 !    was active in the job writing the .res file.
@@ -2430,9 +2436,9 @@ subroutine read_restart_nc
             call read_data (fname, 'radturbten', radturbten)
 
 !---------------------------------------------------------------------
-!    if strat_cloud_mod was not active in the job which wrote the 
+!    if strat_cloud_mod was not active in the job which wrote the
 !    restart file but it is active in the current job, initialize
-!    radturbten to 0.0 and put a message in the output file.  
+!    radturbten to 0.0 and put a message in the output file.
 !---------------------------------------------------------------------
           else
             if (doing_strat()) then
@@ -2452,7 +2458,7 @@ subroutine read_restart_nc
 !---------------------------------------------------------------------
 !    if edt_mod or entrain_mod was not active in the job which wrote the
 !    restart file but it is active in the current job, initialize
-!    lw_tendency to 0.0 and put a message in the output file.  
+!    lw_tendency to 0.0 and put a message in the output file.
 !---------------------------------------------------------------------
           else
             if (doing_edt .or. doing_entrain ) then
@@ -2464,8 +2470,8 @@ subroutine read_restart_nc
           endif
        endif
 !----------------------------------------------------------------------
-     
-     
+
+
 end subroutine read_restart_nc
 
 
@@ -2597,13 +2603,13 @@ integer, dimension(:,:),    intent(in),optional :: kbot
 !      q              specific humidity at current time step  kg / kg ]
 !      r              multiple 3d tracer fields at current time step
 !      um,vm          zonal and meridional wind at previous time step
-!      tm,qm          temperature and specific humidity at previous 
+!      tm,qm          temperature and specific humidity at previous
 !                     time step
 !      rm             multiple 3d tracer fields at previous time step
 !      udt            zonal wind tendency [ m / s**2 ]
 !      vdt            meridional wind tendency [ m / s**2 ]
 !      tdt            temperature tendency [ deg k / sec ]
-!      qdt            specific humidity tendency 
+!      qdt            specific humidity tendency
 !                     [  kg vapor / kg air / sec ]
 !      rdt            multiple tracer tendencies [ unit / unit / sec ]
 !
@@ -2619,15 +2625,15 @@ integer, dimension(:,:),    intent(in),optional :: kbot
 !----------------------------------------------------------------------
 !   local variables:
 
-      integer ::  id, jd, kd  ! model dimensions on the processor  
+      integer ::  id, jd, kd  ! model dimensions on the processor
       integer ::  ierr        ! error flag
 
 !--------------------------------------------------------------------
 !    define the sizes that the arrays should be.
 !--------------------------------------------------------------------
-      id = size(u,1) 
-      jd = size(u,2) 
-      kd = size(u,3) 
+      id = size(u,1)
+      jd = size(u,2)
+      kd = size(u,3)
 
 !--------------------------------------------------------------------
 !    check the dimensions of each input array. if they are incompat-
@@ -2730,7 +2736,7 @@ integer                             :: ierr
 !     data        array to be checked
 !     name        name associated with array to be checked
 !     id, jd      expected i and j dimensions
-!     
+!
 !  result variable:
 !
 !     ierr        set to 0 if ok, otherwise is a count of the number
@@ -2801,7 +2807,7 @@ integer  ierr
 !     data        array to be checked
 !     name        name associated with array to be checked
 !     id, jd,kd   expected i, j and k dimensions
-!     
+!
 !  result variable:
 !
 !     ierr        set to 0 if ok, otherwise is a count of the number
@@ -2879,7 +2885,7 @@ integer                                 :: ierr
 !     data          array to be checked
 !     name          name associated with array to be checked
 !     id,jd,kd,nt   expected i, j and k dimensions
-!     
+!
 !  result variable:
 !
 !     ierr          set to 0 if ok, otherwise is a count of the number
@@ -2921,7 +2927,7 @@ integer                                 :: ierr
 
 
 !#######################################################################
- 
- 
- 
+
+
+
                 end module physics_driver_mod
