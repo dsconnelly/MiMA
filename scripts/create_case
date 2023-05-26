@@ -1,0 +1,38 @@
+#!/bin/bash
+
+case_dir=$1
+n_years=$2
+
+base_dir=$3
+[ -n "${base_dir}" ]
+has_base=$?
+
+[ -z "$4" ]
+save_data=$?
+
+carbon=${5:-390}
+
+mkdir -p "${case_dir}/INPUT" "${case_dir}/RESTART"
+case_name=$(basename ${case_dir})
+
+cp templates/* ${case_dir}
+cp ../input/INPUT/* "${case_dir}/INPUT"
+cp "../exp/exec.greene/mima.x" ${case_dir}
+
+sed -i "s,CASE_DIR,${case_dir}," "${case_dir}/submit.slurm"
+sed -i "s/CASE_NAME/${case_name}/" "${case_dir}/submit.slurm"
+sed -i "s/N_YEARS/${n_years}/" "${case_dir}/submit.slurm"
+
+sed -i "s/HAS_BASE/${has_base}/" "${case_dir}/submit.slurm"
+sed -i "s,BASE_DIR,${base_dir}," "${case_dir}/submit.slurm"
+
+sed -i "s/SAVE_DATA/${save_data}/" "${case_dir}/submit.slurm"
+
+sed -i "s/CARBON/${carbon}/" "${case_dir}/input.nml"
+
+
+
+
+
+
+
