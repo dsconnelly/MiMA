@@ -287,6 +287,7 @@ type(object)       :: model
 type(tuple)        :: args
 integer            :: e
 
+integer, parameter :: n_input = 161 ! (40 wind, 39 shear, 40 T, 40 Nsq, p_surf, lat)
 integer, parameter :: n_output = 40
 real, dimension(:,:,:), allocatable :: X_u_for, X_v_for
 
@@ -1680,14 +1681,14 @@ subroutine make_model_input(is, js, uuu, vvv, temp, zbf, pfull, lat)
     real, dimension(:,:), intent(in)                 :: lat
 
     ! local variables
-    integer :: i, j, imax, jmax, n_input, s
+    integer :: i, j, imax, jmax, s
     real    :: rad2deg
 
     imax = size(uuu, 1)
     jmax = size(uuu, 2)
     
     rad2deg = 180 / 3.14159265358979
-    n_input = 161 ! (40 wind, 39 shear, 40 T, 40 Nsq, p_surf, lat)
+    
     
     do j=1,jmax
         do i=1,imax
