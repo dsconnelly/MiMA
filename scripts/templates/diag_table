@@ -11,6 +11,7 @@
 "dynamics", "u_gwf", "u_gwf", "atmos_4xdaily", "all", .false., "none", 2,
 "dynamics", "v_gwf", "v_gwf", "atmos_4xdaily", "all", .false., "none", 2,
 "dynamics", "t_gwf", "t_gwf", "atmos_4xdaily", "all", .false., "none", 2,
+"cg_drag", "bf_cgwd", "bf_cgwd", "atmos_4xdaily", "all", .false., "none", 2,
 # gravity wave drag
 "cg_drag", "gwfu_cgwd", "gwfu_cgwd", "atmos_4xdaily", "all", .false., "none", 2,
 "cg_drag", "gwfv_cgwd", "gwfv_cgwd", "atmos_4xdaily", "all", .false., "none", 2,

@@ -2,13 +2,19 @@
 
 case_dir=$1
 n_years=$2
-
 base_dir=$3
-[ -n "${base_dir}" ]
-has_base=$?
 
-[ -z "$4" ]
-save_data=$?
+if [ -n "${base_dir}" ]; then
+    has_base="true"
+else
+    has_base="false"
+fi
+
+if [ -z "$4" ]; then
+    save_data="true"
+else
+    save_data="false"
+fi
 
 carbon=${5:-390}
 

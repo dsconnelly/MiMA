@@ -55,29 +55,17 @@ for yy in {01..N_YEARS}; do
 
     if SAVE_DATA; then
 
-        cdo --reduce_dim -mermean -daymean -zonmean \
-            -sellonlatbox,0.0,360.0,-5.0,5.0 -selname,u_gwf \
-            ${yy}/atmos_4xdaily.nc ${yy}/qbo.nc
-
-        cdo -mermean -daymean -zonmean \
-            -sellonlatbox,0.0,360.0,59.0,61.0 -selname,u_gwf \
-            ${yy}/atmos_4xdaily.nc ${yy}/ssw.nc
-
-        cdo --reduce_dim -timmean -zonmean \
-            -selname,u_gwf,v_gwf,t_gwf,gwfu_cgwd,gwfv_cgwd \
-            ${yy}/atmos_4xdaily.nc ${yy}/clim.nc
+        cdo --reduce_dim -daymean -zonmean \
+            -selname,ps,u_gwf,v_gwf,t_gwf,bf_cgwd,gwfu_cgwd,gwfv_cgwd \
+            ${yy}/atmos_4xdaily.nc ${yy}/zonal_mean.nc
 
         cdo -sellonlatbox,0.0,360.0,1.0,2.0 \
-            -selname,u_gwf,t_gwf \
-            ${yy}/atmos_4xdaily.nc ${yy}/tropical.nc
-
-        cdo -sellonlatbox,0.0,360.0,39.0,41.0 \
-            -selname,u_gwf,t_gwf \
-            ${yy}/atmos_4xdaily.nc ${yy}/midlatitude.nc
+            -selname,u_gwf,gwfu_cgwd \
+            ${yy}/atmos_4xdaily.nc ${yy}/tropics.nc
 
         cdo -sellonlatbox,0.0,360.0,59.0,61.0 \
-            -selname,u_gwf,t_gwf \
-            ${yy}/atmos_4xdaily.nc ${yy}/polar.nc
+            -selname,u_gwf,gwfu_cgwd \
+            ${yy}/atmos_4xdaily.nc ${yy}/vortex.nc
 
     fi
 
@@ -88,19 +76,14 @@ rm .model.run
 
 if SAVE_DATA; then
 
-    cdo mergetime ??/qbo.nc qbo.nc
-    cdo mergetime ??/ssw.nc ssw.nc
-    cdo timmean -mergetime ??/clim.nc clim.nc
+    cdo mergetime ??/zonal_mean.nc zonal_mean.nc
+    cdo mergetime ??/tropics.nc tropics.nc
+    cdo mergetime ??/vortex.nc vortex.nc
+    cdo collgrid tropics.nc vortex.nc covariance.nc
 
-    cdo mergetime ??/tropical.nc tropical.nc
-    cdo mergetime ??/midlatitude.nc midlatitude.nc
-    cdo mergetime ??/polar.nc polar.nc
-    cdo collgrid tropical.nc midlatitude.nc polar.nc covariance.nc
-
-    rm ??/qbo.nc ??/ssw.nc ??/clim.nc
-    rm ??/tropical.nc tropical.nc
-    rm ??/midlatitude.nc midlatitude.nc
-    rm ??/polar.nc polar.nc
+    rm ??/zonal_mean.nc
+    rm ??/tropics.nc tropics.nc
+    rm ??/vortex.nc vortex.nc
 
 fi
 
