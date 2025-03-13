@@ -1,10 +1,18 @@
 #!/bin/csh -f
+
+source /share/apps/lmod/lmod/init/csh
+
+module purge
+module load intel/19.1.2
+module load netcdf-fortran/intel/4.5.3
+module load openmpi/intel/4.1.1
+
 #Minimal runscript for atmospheric dynamical cores
 set echo 
 #--------------------------------------------------------------------------------------------------------
 # define variables
-set platform  = nci                                   # A unique identifier for your platform
-set npes      = $PBS_NCPUS                            # number of processors
+set platform  = greene                                # A unique identifier for your platform
+set npes      = $SLURM_CPUS_PER_TASK                  # number of processors
 set template  = $cwd/../bin/mkmf.template.$platform   # path to template for your platform
 set mkmf      = $cwd/../bin/mkmf                      # path to executable mkmf
 set sourcedir = $cwd/../src                           # path to directory containing model source code
