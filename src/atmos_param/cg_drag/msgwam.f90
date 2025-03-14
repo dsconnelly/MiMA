@@ -6,7 +6,7 @@ module cg_drag_mod
 ! ------------------------------------------------------------------------------
 
 use constants_mod,    only: PI, constants_init
-use fms_mod,          only: check_nml_error, close_file, file_exist, fms_init,
+use fms_mod,          only: check_nml_error, close_file, file_exist, fms_init, &
                             mpp_pe, mpp_root_pe, open_namelist_file, stdlog
 use time_manager_mod, only: time_manager_init, time_type
 
@@ -44,7 +44,9 @@ real :: source_level_pressure = 300.e+02 ! (Pa)
 real :: T_hat = 10 ! (hours)
 
 namelist / cg_drag_nml / &
-    bc_flux, c_max, extrinsic, n_source, source_level_pressure
+    bc_flux, damp_level_pressure, dr_source, cp_center, cp_max, cp_width, &
+    dk_source, dl_source, epsilon, extrinsic, H_rho, N0, n_max, n_source, &
+    source_level_pressure, T_hat
 
 ! ------------------------------------------------------------------------------
 ! private variables
@@ -64,8 +66,8 @@ integer :: n_per_dir
 real :: omega_hat_source
 real, dimension(4) :: phi_source
 
-real, dimension(:, :, :, :) :: rays
-integer, dimension(:, :, :) :: is_active
+real, dimension(:, :, :, :), allocatable :: rays
+integer, dimension(:, :, :), allocatable :: is_active
 
 contains
 
@@ -92,6 +94,7 @@ subroutine cg_drag_init(lonb, latb, pref, Time, axes)
     ! local variables
     ! ---------------
     integer :: ierr, io, log_unit, nml_unit
+    integer :: i_max, j_max, k_max
     integer :: i, j, k, n
 
     real :: arg, total
@@ -113,7 +116,7 @@ subroutine cg_drag_init(lonb, latb, pref, Time, axes)
             ! maybe : add 'end" argument to read statement
         end do
 
-        call close_file(unit)
+        call close_file(nml_unit)
     end if
 
     call write_version_number(version, tagname)
@@ -144,7 +147,7 @@ subroutine cg_drag_init(lonb, latb, pref, Time, axes)
     
     do n = 1, n_per_dir
         cp_source(n) = (n - 0.5) * dc_source
-        arg = (cp_source(n) - c_center) / c_width
+        arg = (cp_source(n) - cp_center) / cp_width
         flux_source(n) = exp(-0.5 * (arg ** 2))
     end do
 
@@ -152,15 +155,15 @@ subroutine cg_drag_init(lonb, latb, pref, Time, axes)
     flux_source = flux_source * (bc_flux / 4) / total
     omega_hat_source = 2 * PI / (T_hat * 3600)
 
-    n_i = size(lonb) - 1
-    n_j = size(latb) - 1
+    i_max = size(lonb) - 1
+    j_max = size(latb) - 1
 
-    allocate(rays(n_i, n_j, N_PROPS, n_max))
-    allocate(is_active(n_i, n_j, n_max))
-    allocate(last_meta(n_i, n_j))
+    allocate(rays(i_max, j_max, N_PROPS, n_max))
+    allocate(is_active(i_max, j_max, n_max))
+    allocate(last_meta(i_max, j_max))
 
-    allocate(f_Cor(n_j))
-    do n = 1, n_j
+    allocate(f_Cor(j_max))
+    do n = 1, j_max
         lat = 0.5 * (latb(n) + latb(n + 1))
         f_Cor(n) = 2 * PI * sin(lat) / 86400
     end do
@@ -169,7 +172,7 @@ end subroutine cg_drag_init
 
 subroutine cg_drag_calc(is, js, lat, &
     p_full, z_full, temp, uuu, vvv, &
-    Time, dt, dudt, dvdt)
+    Time, dt, du_dt, dv_dt)
 
     ! ---------
     ! arguments
@@ -240,7 +243,7 @@ subroutine get_drays_dt(z_full, uuu, vvv, drays_dt)
     ! arguments
     ! ---------
     real, dimension(:, :, :), intent(in) :: z_full, uuu, vvv
-    real, dimension(:, :, :, :) intent(out) :: drays_dt
+    real, dimension(:, :, :, :), intent(out) :: drays_dt
     ! should have shape (n_i, n_j, N_PROPS - 2, n_max)
 
     ! ---------------
@@ -417,9 +420,9 @@ function get_m(k, l, f) result(m)
     real :: omega_hat_sq
 
     omega_hat_sq = omega_hat_source ** 2
-    m = -sqrt(
-        (k ** 2 + l ** 2) * (N0 ** 2 - omega_hat_sq) /
-        (omega_hat_sq - f ** 2)
+    m = -sqrt( &
+        (k ** 2 + l ** 2) * (N0 ** 2 - omega_hat_sq) / &
+        (omega_hat_sq - f ** 2) &
     )
 
 end function get_m
@@ -456,9 +459,9 @@ function get_omega_hat(k, l, m, f) result(omega_hat)
 
     m2 = (m ** 2) + (hgamma() ** 2)
 
-    omega_hat = sqrt(
-        (N0 ** 2 * (k ** 2 + l ** 2) + f ** 2 * m2) /
-        (k ** 2 + l ** 2 + m2)
+    omega_hat = sqrt( &
+        (N0 ** 2 * (k ** 2 + l ** 2) + f ** 2 * m2) / &
+        (k ** 2 + l ** 2 + m2) &
     )
 
 end function omega_hat
