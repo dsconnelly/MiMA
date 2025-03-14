@@ -228,12 +228,12 @@ subroutine take_RK3_step(z_full, uuu, vvv, dt)
     increment = 0
 
     do step = 1, 3
-        call get_drays_dt(z_ful, uuu, vvv, drays_dt)
+        call get_drays_dt(z_full, uuu, vvv, drays_dt)
         increment = drays_dt * dt + As(step) * increment
-        rays(:, :, 1:9) = rays(:, :, 1:9) + Bs(step) * increment
+        rays(:, :, 1:9, :) = rays(:, :, 1:9, :) + Bs(step) * increment
     end do
 
-    rays(:, :, 10) = rays(:, :, 10) + dt
+    rays(:, :, 10, :) = rays(:, :, 10, :) + dt
 
 end subroutine
 
@@ -259,10 +259,10 @@ subroutine get_drays_dt(z_full, uuu, vvv, drays_dt)
     j_max = size(uuu, 2)
     q_max = size(uuu, 3)
 
-    do i = 1, i_max
+    do n = 1, n_max
         do j = 1, j_max
-            do n = 1, n_max
-                if (.not. is_active(n)) then
+            do i = 1, i_max
+                if (.not. is_active(i, j, n)) then
                     drays_dt(i, j, :, n) = 0
                     cycle
                 end if
@@ -302,7 +302,7 @@ subroutine get_drays_dt(z_full, uuu, vvv, drays_dt)
 
 end subroutine get_drays_dt
 
-function get_launches(lat, zfull, uuu, vvv, dt) result(launches)
+function get_launches(lat, z_full, uuu, vvv, dt) result(launches)
     
     ! ---------
     ! arguments
@@ -357,13 +357,13 @@ function get_launches(lat, zfull, uuu, vvv, dt) result(launches)
                     dm = get_dm(m)
 
                     volume = dk_source * dl_source * dm
-                    dens = flux(n) / abs(wvn_hor * volume * cg)
+                    dens = flux_source(n) / abs(wvn_hor * volume * cg)
 
                     prob = epsilon * cg * dt / dr_source
                     q = (p - 1) * n_per_dir + n
 
                     if (rand(i, j, q) < prob) then
-                        launches(i, j, 1, q) = zfull(k_source) - 0.5 * dr_source
+                        launches(i, j, 1, q) = z_full(k_source) - 0.5 * dr_source
                         launches(i, j, 2, q) = dr_source
 
                         launches(i, j, 3, q) = k
@@ -405,7 +405,7 @@ function get_cg_r(k, l, m, f) result(cg_r)
 
     cg_r = -m * (omega_hat ** 2 - f ** 2) / omega_hat / wvn_sq
 
-end function cg_r
+end function get_cg_r
 
 function get_m(k, l, f) result(m)
 
@@ -464,6 +464,6 @@ function get_omega_hat(k, l, m, f) result(omega_hat)
         (k ** 2 + l ** 2 + m2) &
     )
 
-end function omega_hat
+end function get_omega_hat
 
 end module cg_drag_mod
