@@ -32,3 +32,4 @@ simple_jobscript*
 bin/mppnccombine.nyu
 
 .DS_Store
+.vscode/*
