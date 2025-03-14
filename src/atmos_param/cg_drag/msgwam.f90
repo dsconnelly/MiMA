@@ -7,7 +7,8 @@ module cg_drag_mod
 
 use constants_mod,    only: PI, constants_init
 use fms_mod,          only: check_nml_error, close_file, file_exist, fms_init, &
-                            mpp_pe, mpp_root_pe, open_namelist_file, stdlog
+                            mpp_pe, mpp_root_pe, open_namelist_file, stdlog, &
+                            write_version_number
 use time_manager_mod, only: time_manager_init, time_type
 
 implicit none
@@ -363,7 +364,7 @@ function get_launches(lat, z_full, uuu, vvv, dt) result(launches)
                     q = (p - 1) * n_per_dir + n
 
                     if (rand(i, j, q) < prob) then
-                        launches(i, j, 1, q) = z_full(k_source) - 0.5 * dr_source
+                        launches(i, j, 1, q) = z_full(i, j, k_source) - 0.5 * dr_source
                         launches(i, j, 2, q) = dr_source
 
                         launches(i, j, 3, q) = k
