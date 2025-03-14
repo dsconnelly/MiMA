@@ -41,7 +41,7 @@ if ($add_flag) then
     echo "NETCDF_LIB: "$NETCDF_LIB
 endif
 if ( ! -f $mppnccombine ) then
-  icc -O -o $mppnccombine -I$NETCDF_INC $NETCDF_LIB $cwd/../postprocessing/mppnccombine.c 
+  gcc -O -o $mppnccombine -I$NETCDF_INC $NETCDF_LIB $cwd/../postprocessing/mppnccombine.c 
 endif
 if ($add_flag) then
     set NETCDF_INC = `nc-config --fflags`

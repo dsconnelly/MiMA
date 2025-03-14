@@ -1,29 +1,18 @@
 "MiMA"
 0001 1 1 0 0 0
 #output files
-"atmos_daily",    24, "hours", 1, "days", "time",
-"atmos_davg",     24, "hours", 1, "days", "time",
-"atmos_dext",     24, "hours", 1, "days", "time",
-"atmos_avg",      -1, "hours", 1, "days", "time",
+"atmos_dmean",    24, "hours", 1, "days", "time",
 #diagnostic field entries. 
 # quantities needed for plevel interpolation,
- "dynamics",        "bk",         "bk",             "atmos_daily",    "all", .false., "none", 2,
- "dynamics",        "pk",         "pk",             "atmos_daily",    "all", .false., "none", 2,
- "dynamics",        "ps",         "ps",             "atmos_daily",    "all", .false., "none", 2,
+ "dynamics",        "bk",         "bk",             "atmos_dmean",    "all", .false., "none", 2,
+ "dynamics",        "pk",         "pk",             "atmos_dmean",    "all", .false., "none", 2,
+ "dynamics",        "ps",         "ps",             "atmos_dmean",    "all", .false., "none", 2,
 # dynamics variables
- "dynamics",        "ucomp",      "ucomp",          "atmos_daily",    "all", .false., "none", 2,
- "dynamics",        "temp",       "temp",           "atmos_daily",    "all", .false., "none", 2,
- "dynamics",        "sphum",      "sphum",          "atmos_daily",    "all", .false., "none", 2,
- "dynamics",        "ucomp",      "ucomp",          "atmos_avg",      "all", .true.,  "none", 2,
- "dynamics",        "temp",       "temp",           "atmos_avg",      "all", .true.,  "none", 2,
- "dynamics",        "sphum",      "sphum",          "atmos_avg",      "all", .true.,  "none", 2,
-# surface variables
- "simple_surface",  "t_surf",     "t_surf",         "atmos_davg",     "all", .true., "none", 2,
- "simple_surface",  "t_surf",     "t_surf_max",     "atmos_dext",     "all", "max",  "none", 2,
- "simple_surface",  "t_surf",     "t_surf_min",     "atmos_dext",     "all", "min",  "none", 2,
+ "dynamics",        "ucomp",      "ucomp",          "atmos_dmean",    "all", .true., "none", 2,
+ "dynamics",        "temp",       "temp",           "atmos_dmean",    "all", .true., "none", 2,
+ "dynamics",        "sphum",      "sphum",          "atmos_dmean",    "all", .true., "none", 2,
 # moisture variables
-  "moist",          "precip",     "precip",         "atmos_davg",     "all", .true., "none", 2,
-  "moist",          "precip",     "precip_max",     "atmos_dext",     "all", "max",  "none", 2,
+  "moist",          "precip",     "precip",         "atmos_dmean",    "all", .true., "none", 2,
 #=============================================================================================
 #
 #  FORMATS FOR FILE ENTRIES (not all input values are used)
