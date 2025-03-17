@@ -1,120 +1,155 @@
 module cg_drag_mod
 
-! ------------------------------------------------------------------------------
-! This version of cg_drag_mod implements MS-GWaM as described in Boloni et al.
-! (2021) and implemented in dsconnelly/python-msgwam on Github.
-! ------------------------------------------------------------------------------
+! ==============================================================================
+! This version of cg_drag_mod implements MS-GWaM as described in Bölöni et al.
+! (2021) and implemented in dsconnelly/python-msgwam on GitHub. A future version
+! of this code should allow switching gravity wave schemes in the namelist.
+! ==============================================================================
 
-use constants_mod,    only: PI, constants_init
-use fms_mod,          only: check_nml_error, close_file, file_exist, fms_init, &
-                            mpp_pe, mpp_root_pe, open_namelist_file, stdlog, &
-                            write_version_number
+use constants_mod,    only: constants_init, PI, RDGAS
+use fms_mod,          only: check_nml_error, close_file, error_mesg, FATAL, &
+                            file_exist, fms_init, mpp_pe, mpp_root_pe, &
+                            open_namelist_file, stdlog, write_version_number
 use time_manager_mod, only: time_manager_init, time_type
 
 implicit none
 private
 
-character(len=128) :: version = 'cg_drag_msgwam.f90, 2025/03/14'
-character(len=128) :: tagname = 'cayuga'
+character(len=128) :: version = "msgwam.f90, 2025/03/17"
+character(len=128) :: tagname = "cayuga"
 
-! ------------------------------------------------------------------------------
+! ==============================================================================
 ! interfaces
-! ------------------------------------------------------------------------------
+! ==============================================================================
 
-public cg_drag_init, cg_drag_calc, cg_drag_end
+public cg_drag_calc, cg_drag_end, cg_drag_init
 
-! ------------------------------------------------------------------------------
+! ==============================================================================
 ! namelist
-! ------------------------------------------------------------------------------
+! ==============================================================================
 
-real :: bc_flux = 0.01 ! (Pa)
-real :: damp_level_pressure = 0.8e+02 ! (Pa)
-real :: dr_source = 1000 ! (m)
-real :: cp_center = 15 ! (m / s)
-real :: cp_max = 50 ! (m / s)
-real :: cp_width = 10 ! (m / s)
-real :: dk_source = 0.0001 ! (1 / m)
-real :: dl_source = 0.0001 ! (1 / m)
-real :: epsilon = 1
+real :: boundary_flux = 0.01
+real :: dr_source = 1000.
+real :: cp_center = 15.
+real :: cp_max = 50.
+real :: cp_width = 10.
+real :: dk_source = 0.0001
+real :: dl_source = 0.0001
+real :: epsilon = 1.
 logical :: extrinsic = .true.
-real :: H_rho = 8.e3 ! (m)
-real :: N0 = 0.015 ! (1 / s)
+integer :: max_age = 10 * 86400
+real :: min_flux = 1.e-8
 integer :: n_max = 2500
 integer :: n_source = 48
-real :: source_level_pressure = 300.e+02 ! (Pa)
-real :: T_hat = 10 ! (hours)
+real :: source_pressure = 300.e+2
+real :: T_hat_source = 10. * 3600
+
+! The scheme should eventually be rewritten to calculate these values from the
+! mean flow, but for now the ray tracer treats them as constants. 
+real :: H_rho = 8.e3
+real :: N0 = 0.015
 
 namelist / cg_drag_nml / &
-    bc_flux, damp_level_pressure, dr_source, cp_center, cp_max, cp_width, &
-    dk_source, dl_source, epsilon, extrinsic, H_rho, N0, n_max, n_source, &
-    source_level_pressure, T_hat
+    boundary_flux, dr_source, cp_center, cp_max, cp_width, dk_source, &
+    dl_source, epsilon, extrinsic, max_age, min_flux, n_max, n_source, &
+    source_pressure, T_hat_source, H_rho, N0
 
-! ------------------------------------------------------------------------------
-! private variables
-! ------------------------------------------------------------------------------
+! ==============================================================================
+! module-level private variables
+! ==============================================================================
 
-integer, parameter :: N_PROPS = 11
-logical :: module_is_initialized = .false.
+type :: t_inc
+    real :: r, m
+end type t_inc
 
-integer :: k_source, k_damp
-real, dimension(:), allocatable :: f_Cor
+type :: t_ray
+    real :: r, dr, k, l, m, dk, dl, dm, dens
+    integer :: age, meta
+end type t_ray
 
-real :: dc_source
-real, dimension(:), allocatable :: cp_source
-real, dimension(:), allocatable :: flux_source
-real, dimension(:, :), allocatable :: last_meta
+type :: t_tend
+    real :: r, m
+end type t_tend
+
+interface operator (+)
+    module procedure add_ray_inc
+end interface
+
+interface operator (*)
+    module procedure mult_scalar_inc, mult_scalar_tend
+end interface
+
+interface get_cg_r
+    module procedure cg_r_from_ray
+    module procedure cg_r_from_reals
+end interface
+
+interface get_omega_hat
+    module procedure omega_hat_from_ray
+    module procedure omega_hat_from_reals
+end interface
+
+type(t_ray), dimension(:, :, :), allocatable :: rays
+type(t_tend), dimension(:, :, :), allocatable :: drays_dt
+type(t_inc), dimension(:, :, :), allocatable :: increments
+type(t_ray), dimension(:, :, :), allocatable :: launches
+
 integer :: n_per_dir
-real :: omega_hat_source
-real, dimension(4) :: phi_source
+real :: dc_source, omega_hat_source
+real, dimension(4) :: cos_phi, sin_phi
+real, dimension(:), allocatable, cp_source, flux_source
+integer, dimension(:, :), allocatable :: last_meta
 
-real, dimension(:, :, :, :), allocatable :: rays
-integer, dimension(:, :, :), allocatable :: is_active
+real, dimension(:, :, :), allocatable :: flux_x, flux_y, z_faces
+
+real :: hgamma
+integer :: q_source
+real, dimension(:), allocatable :: coriolis
+integer :: i_max, j_max, q_max
+
+real, dimension(3) :: As = (/ 0., -5. / 9., -153. / 128. /)
+real, dimension(3) :: Bs = (/ 1. / 3., 15. / 16., 8. / 15. /)
+
+logical :: is_initialized = .false.
 
 contains
 
-! ------------------------------------------------------------------------------
+! ==============================================================================
 ! public subroutines
-! ------------------------------------------------------------------------------
+! ==============================================================================
 
-subroutine cg_drag_init(lonb, latb, pref, Time, axes)
+subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
 
-    ! --------------------
-    ! intent(in) variables
-    ! --------------------
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:), intent(in) :: lon_bounds, lat_bounds, p_ref
+    type(time_type),    intent(in) :: Time
+    real, dimension(4), intent(in) :: axes
 
-    real,            dimension(:), intent(in) :: lonb, latb, pref
-    integer,         dimension(4), intent(in) :: axes
-    type(time_type),               intent(in) :: Time
-
-    ! lonb, latb : model longitudes and latitudes at cell corners
-    ! pref : reference pressures at full levels, plus surface value
-    ! Time : current time
-    ! axes : unused
-
-    ! ---------------
+    ! --------------------------------------------------------------------------
     ! local variables
-    ! ---------------
-    integer :: ierr, io, log_unit, nml_unit
-    integer :: i_max, j_max, k_max
-    integer :: i, j, k, n
+    ! --------------------------------------------------------------------------
+    integer :: i_err, io, log_unit, nml_unit
+    integer :: j, q
 
-    real :: arg, total
-    real :: lat
+    ! --------------------------------------------------------------------------
 
-    if (module_is_initialized) return
+    if (is_initialized) then
+        return
+    end if
 
     call fms_init
     call time_manager_init
-    call constants_init
+    call constants_int
 
-    if (file_exist('input.nml')) then
+    if (file_exist("input.nml")) then
         nml_unit = open_namelist_file()
-        ierr = 1
+        i_err = 1
 
-        do while (ierr /= 0)
+        do while (i_err /= 0)
             read(nml_unit, nml=cg_drag_nml, iostat=io)
-            ierr = check_nml_error(io, 'cg_drag_nml')
-            ! maybe : add 'end" argument to read statement
+            i_err = check_nml_error(io, "cg_drag_nml")
         end do
 
         call close_file(nml_unit)
@@ -122,30 +157,429 @@ subroutine cg_drag_init(lonb, latb, pref, Time, axes)
 
     call write_version_number(version, tagname)
     log_unit = stdlog()
-    if (mpp_pe() == mpp_root_pe()) write (log_unit, nml=cg_drag_nml)
 
-    k_max = size(pref(:)) - 1
+    if (mpp_pe() == mpp_root_pe()) then
+        write (log_unit, nml=cg_drag_nml)
+    end if
 
-    do k = 1, k_max
-        if (pref(k) < damp_level_pressure) then
-            k_damp = k
-        end if
+    i_max = size(lon_bounds) - 1
+    j_max = size(lat_bounds) - 1
+    q_max = size(p_ref(:)) - 1
 
-        if (pref(k) > source_level_pressure) then
-            k_source = k
+    allocate(rays(i_max, j_max, n_max))
+    allocate(drays_dt(i_max, j_max, n_max))
+    allocate(increments(i_max, j_max, n_max))
+    allocate(launches(i_max, j_max, n_source))
+
+    allocate(flux_x(i_max, j_max, q_max))
+    allocate(flux_y(i_max, j_max, q_max))
+    allocate(z_faces(i_max, j_max, q_max + 1))
+
+    rays(:, :, :)%meta = -1
+
+    do q = 1, q_max
+        if (p_ref(q) > source_pressure) then
+            q_source = q
             exit
         end if
     end do
 
+    allocate(coriolis(j_max))
+
+    do j = 1, j_max
+        lat = 0.5 * (lat_bounds(j) + lat_bounds(j + 1))
+        coriolis(j) = 2 * PI * sin(lat) / 86400.
+    end do
+
+    ! When H_rho is computed correctly, this will have to be rewritten.
+    hgamma = (1. / 2. - 2. / 7.) * H_rho
+
+    call init_source
+
+end subroutine cg_drag_init
+
+subroutine cg_drag_calc(i_start, j_start, lat, &
+    p_full, z_full, temp, uuu, vvv, &
+    Time, dt, du_dt, dv_dt)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    integer,                  intent(in)  :: i_start, j_start
+    real, dimension(:, :),    intent(in)  :: lat
+    real, dimension(:, :, :), intent(in)  :: p_full, z_full, temp, uuu, vvv
+    type(time_type),          intent(in)  :: Time
+    real,                     intent(in)  :: dt
+    real, dimension(:, :, :), intent(out) :: du_dt, dv_dt
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+
+    ! --------------------------------------------------------------------------
+
+    call take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
+    call check_boundaries(z_full, rays)
+    call check_source(z_full, uuu, vvv, dt, rays)
+
+    call update_faces(z_full, z_faces)
+    call update_fluxes(z_faces, rays, flux_x, flux_y)
+    call calc_accelerations(z_faces, p_full, temp, flux_x, flux_y, du_dt, dv_dt)
+
+end subroutine cg_drag_calc
+
+subroutine cg_drag_end
+
+    is_initialized = .false.
+
+end subroutine cg_drag_end
+
+! ==============================================================================
+! type(t_ray) and type(t_tend) helpers
+! ==============================================================================
+
+type(t_ray) function add_ray_inc(ray, inc) result(out)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    type(t_ray), intent(in) :: ray
+    type(t_inc), intent(in) :: inc
+    type(t_ray)             :: out
+
+    type(t_ray), intent(in) :: a, b
+    type(t_inc)             :: c
+
+    ! --------------------------------------------------------------------------
+
+    ray%r = ray%r + inc%r
+    ray%m = ray%m + inc%m
+
+end function add_ray_inc
+
+subroutine delete_at(i, j, n, rays)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    integer,                         intent(in)    :: i, j, n
+    type(t_ray), dimension(:, :, :), intent(inout) :: rays
+
+    ! --------------------------------------------------------------------------
+
+    rays(i, j, n)%r = 0
+    rays(i, j, n)%dr = 0
+
+    rays(i, j, n)%k = 0
+    rays(i, j, n)%l = 0
+    rays(i, j, n)%m = 0
+
+    rays(i, j, n)%dk = 0
+    rays(i, j, n)%dl = 0
+    rays(i, j, n)%dm = 0
+    rays(i, j, n)%dens = 0
+
+    rays(i, j, n)%age = 0
+    rays(i, j, n)%meta = -1
+
+end subroutine delete_at
+
+type(t_inc) function mult_scalar_inc(c, inc) result(out)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    real,        intent(in) :: c
+    type(t_inc), intent(in) :: inc
+    type(t_inc)             :: out
+
+    ! --------------------------------------------------------------------------
+
+    out%r = c * inc%r
+    out%m = c * inc%m
+
+end function mult_scalar_inc
+
+type(t_inc) function mult_scalar_tend(c, tend) result(inc)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    real,         intent(in) :: c
+    type(t_tend), intent(in) :: tend
+    type(t_inc)              :: inc
+
+    ! --------------------------------------------------------------------------
+
+    inc%r = c * tend%r
+    inc%m = c * tend%m
+
+end function mult_scalar_tend
+
+! ==============================================================================
+! dispersion relation
+! ==============================================================================
+
+real function cg_r_from_ray(ray, f) result(cg_r)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    type(t_ray), intent(in) :: ray
+    real,        intent(in) :: f
+    real                    :: cg_r
+
+    ! --------------------------------------------------------------------------
+    
+    cg_r = cg_r_from_reals(ray%k, ray%l, ray%m, f)
+
+end function cg_r_from_ray
+
+real function cg_r_from_reals(k, l, m, f) result(cg_r)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    real, intent(in) :: k, l, m, f
+    real             :: cg_r
+
+    ! --------------------------------------------------------------------------
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    real :: omega_hat, wvn_sq
+
+    ! --------------------------------------------------------------------------
+
+    wvn_sq = k ** 2 + l ** 2 + m ** 2 + hgamma ** 2
+    omega_hat = get_omega_hat(ray, f)
+
+    cg_r = -m * (omega_hat ** 2 - f ** 2) / omega_hat / wvn_sq
+
+end function cg_r_from_reals
+
+real function get_dm(m) result(dm)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    real, intent(in) :: m
+    real             :: dm
+
+    ! --------------------------------------------------------------------------
+
+    dm = dc_source * (m ** 2) / N0
+
+end function get_dm
+
+real function get_m(k, l, f) result(m)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    real, intent(in) :: k, l, f
+    real             :: m
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    real :: omega_hat_sq
+
+    ! --------------------------------------------------------------------------
+
+    omega_hat_sq = omega_hat_source ** 2
+    m = -sqrt(&
+        (k ** 2 + l ** 2) * (N0 ** 2 - omega_hat_sq) / &
+        (omega_hat_sq - f ** 2) &
+    )
+
+end function get_m
+
+real function omega_hat_from_ray(ray, f) result(omega_hat)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    type(t_ray), intent(in) :: ray
+    real,        intent(in) :: f
+    real                    :: omega_hat
+
+    ! --------------------------------------------------------------------------
+
+    omega_hat = omega_hat_from_reals(ray%k, ray%l, ray%m, f)
+
+end function omega_hat_from_ray
+
+real function omega_hat_from_reals(k, l, m, f) result(omega_hat)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    real, intent(in) :: k, l, m, f
+    real             :: omega_hat
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    real :: m2
+
+    ! --------------------------------------------------------------------------
+
+    m2 = m ** 2 + hgamma ** 2
+    omega_hat = sqrt( &
+        (N0 ** 2 * (k ** 2 + l ** 2) + f ** 2 * m2) / &
+        (k ** 2 + l ** 2 + m2) &
+    )
+
+end function omega_hat_from_reals
+
+! ==============================================================================
+! wave source
+! ==============================================================================
+
+subroutine check_source(z_full, uuu, vvv, dt, rays)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),        intent(in)    :: z_full, uuu, vvv
+    real,                            intent(in)    :: dt
+    type(t_ray), dimension(:, :, :), intent(inout) :: rays
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer, dimension(size(uuu, 1), size(uuu, 2)) :: n_active, n_excess
+    integer :: i, j, n, s
+    ! --------------------------------------------------------------------------
+
+    call update_launches(z_full, uuu, vvv, dt, last_meta, launches)
+
+    n_active = 0
+    n_excess = 0
+
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                if (rays(i, j, n)%meta /= -1) then
+                    n_active(i, j) = n_active(i, j) + 1
+                end if
+            end do
+        end do
+    end do
+
+    do n = 1, n_source
+        do j = 1, j_max
+            do i = 1, i_max
+                if (launches(i, j, n)%meta /= -1) then
+                    n_excess(i, j) = n_excess(i, j) + 1
+                end if
+            end do
+        end do
+    end do
+
+    n_excess = max(n_excess + n_active - n_max, 0)
+    call prune(n_excess, rays)
+
+    do j = 1, j_max
+        do i = 1, i_max
+            add_at = 1
+            do n = 1, n_source
+                if (launches(i, j, n)%meta == -1) then
+                    cycle
+                end if
+
+                do s = add_at, n_max
+                    if (rays(i, j, s)%meta == -1) then
+                        add_at = s
+                        exit
+                    end if
+                end do
+
+                if (rays(i, j, add_at)%meta /= -1) then
+                    call error_mesg("cg_drag_mod", "too many rays", FATAL)
+                end if
+
+                rays(i, j, add_at) = launches(i, j, n)
+            end do
+        end do
+    end do
+end subroutine check_source
+
+subroutine find_lowest(values, n_find, idx)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),    intent(in)  :: values
+    integer, dimension(:, :),    intent(in)  :: n_find
+    integer, dimension(:, :, :), intent(out) :: idx
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i, j, n
+    integer :: add_at, s
+    real, dimension(size(values, 1), size(values, 2), size(idx, 3)), &
+        allocatable :: lowest
+
+    ! --------------------------------------------------------------------------
+
+    lowest = maxval(values)
+
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+
+                add_at = -1
+                do s = 1, n_find(i, j)
+                    if (values(i, j, n) < lowest(i, j, s)) then
+                        add_at = s
+                    else
+                        exit
+                    end if
+                end do
+
+                if (add_at == -1) then
+                    cycle
+                end if
+
+                do s = 1, add_at - 1
+                    lowest(i, j, s) = lowest(i, j, s + 1)
+                end do
+
+                lowest(i, j, add_at) = values(i, j, n)
+                idx(i, j, add_at) = n
+            end do
+        end do
+    end do
+
+end subroutine find_lowest
+
+subroutine init_source
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+
+    integer :: n
+    real :: phi, total
+
+    ! --------------------------------------------------------------------------
+
     do n = 1, 4
-        phi_source(n) = (n - 1) * PI / 2
+        phi = (n - 1) * PI / 2
+        cos_phi(n) = cos(phi)
+        sin_phi(n) = sin(phi)
     end do
 
     n_per_dir = n_source / 4
+    dc_source = cp_max / n_per_dir
+
     allocate(cp_source(n_per_dir))
     allocate(flux_source(n_per_dir))
-    dc_source = cp_max / n_per_dir
-    
+
     do n = 1, n_per_dir
         cp_source(n) = (n - 0.5) * dc_source
         arg = (cp_source(n) - cp_center) / cp_width
@@ -154,317 +588,425 @@ subroutine cg_drag_init(lonb, latb, pref, Time, axes)
 
     total = sum(flux_source)
     flux_source = flux_source * (bc_flux / 4) / total
-    omega_hat_source = 2 * PI / (T_hat * 3600)
+    omega_hat_source = 2 * PI / T_hat_source
 
-    i_max = size(lonb) - 1
-    j_max = size(latb) - 1
+end subroutine init_source
 
-    allocate(rays(i_max, j_max, N_PROPS, n_max))
-    allocate(is_active(i_max, j_max, n_max))
-    allocate(last_meta(i_max, j_max))
+subroutine prune(n_excess, rays)
 
-    allocate(f_Cor(j_max))
-    do n = 1, j_max
-        lat = 0.5 * (latb(n) + latb(n + 1))
-        f_Cor(n) = 2 * PI * sin(lat) / 86400
-    end do
-
-end subroutine cg_drag_init
-
-subroutine cg_drag_calc(is, js, lat, &
-    p_full, z_full, temp, uuu, vvv, &
-    Time, dt, du_dt, dv_dt)
-
-    ! ---------
+    ! --------------------------------------------------------------------------
     ! arguments
-    ! ---------
-    integer,                   intent(in) :: is, js
-    real, dimension(:, :),     intent(in) :: lat
-    real, dimension(:, :, :),  intent(in) :: p_full, z_full, temp, uuu, vvv
-    type(time_type),           intent(in) :: Time
-    real,                      intent(in) :: dt
-    real, dimension(:, :, :), intent(out) :: du_dt, dv_dt
+    ! --------------------------------------------------------------------------
+    integer, dimension(:, :),        intent(in)    :: n_excess
+    type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
-    ! ---------------
+    ! --------------------------------------------------------------------------
     ! local variables
-    ! ---------------
+    ! --------------------------------------------------------------------------
+    real :: omega_hat, volume
+    real, dimension(size(rays, 1), size(rays, 2), size(rays, 3)) :: energy
+    integer, dimension(:, :, :), allocatable :: idx
+    integer :: i, j, n
 
-    call take_RK3_step(z_full, uuu, vvv, dt)
-
-    du_dt = 1. / 86400.
-    dv_dt = 1. / 86400.
-
-end subroutine cg_drag_calc
-
-subroutine cg_drag_end
-
-    module_is_initialized = .false.
-
-end subroutine cg_drag_end
-
-! ------------------------------------------------------------------------------
-! private subroutines
-! ------------------------------------------------------------------------------
-
-subroutine take_RK3_step(z_full, uuu, vvv, dt)
-
-    ! ---------
-    ! arguments
-    ! ---------
-    real, dimension(:, :, :) :: z_full, uuu, vvv
-    real :: dt
-
-    ! ---------------
-    ! local variables
-    ! ---------------
-    integer :: step
-    real, dimension(3) :: As, Bs
-    real, dimension(:, :, :, :), allocatable :: drays_dt, increment
-
-    As = (/ 0., -5. / 9., -153. / 128. /)
-    Bs = (/ 1. / 3., 15. / 16., 8. / 15. /)
-
-    allocate(drays_dt(size(rays, 1), size(rays, 2), N_PROPS - 2, n_max))
-    allocate(increment(size(rays, 1), size(rays, 2), N_PROPS - 2, n_max))
-    increment = 0
-
-    do step = 1, 3
-        call get_drays_dt(z_full, uuu, vvv, drays_dt)
-        increment = drays_dt * dt + As(step) * increment
-        rays(:, :, 1:9, :) = rays(:, :, 1:9, :) + Bs(step) * increment
-    end do
-
-    rays(:, :, 10, :) = rays(:, :, 10, :) + dt
-
-end subroutine
-
-subroutine get_drays_dt(z_full, uuu, vvv, drays_dt)
-
-    ! ---------
-    ! arguments
-    ! ---------
-    real, dimension(:, :, :), intent(in) :: z_full, uuu, vvv
-    real, dimension(:, :, :, :), intent(out) :: drays_dt
-    ! should have shape (n_i, n_j, N_PROPS - 2, n_max)
-
-    ! ---------------
-    ! local variables
-    ! ---------------
-    integer :: i, j, n, q
-    integer :: i_max, j_max, q_max
-    real :: r, k, l, m
-    real :: du_dr, dv_dr
-    real :: z_hi, z_lo, dz
-
-    i_max = size(uuu, 1)
-    j_max = size(uuu, 2)
-    q_max = size(uuu, 3)
+    ! --------------------------------------------------------------------------
 
     do n = 1, n_max
         do j = 1, j_max
             do i = 1, i_max
-                if (.not. is_active(i, j, n)) then
-                    drays_dt(i, j, :, n) = 0
+                omega_hat = get_omega_hat(rays(i, j, n), coriolis(j))
+                volume = rays(i, j, n)%dk * rays(i, j, n)%dl * rays(i, j, n)%dm
+                energy(i, j, n) = rays(i, j, n)%dens * volume * omega_hat
+            end do
+        end do
+    end do
+
+    allocate(idx(i_max, j_max, maxval(n_excess)))
+    call find_lowest(energy, n_excess, idx)
+
+    do j = 1, j_max
+        do i = 1, i_max
+            do n = 1, n_excess(i, j)
+                call delete_at(i, j, idx(i, j, n), rays)
+            end do
+        end do
+    end do
+
+end subroutine prune
+
+subroutine update_launches(z_full, uuu, vvv, dt, last_meta, launches)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),        intent(in)    :: z_full, uuu, vvv
+    real,                            intent(in)    :: dt
+    integer, dimension(:, :),        intent(inout) :: last_meta
+    type(t_ray), dimension(:, :, :), intent(out)   :: launches
+    
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i, j, n, dir, s
+    real :: k, l, m, dm
+    real :: cg, cp, prob, u, v, volume, wvn_hor, z_source
+    real, dimension(size(launches, 1), size(launches, 2), size(launches, 3)) &
+        :: rand
+    ! --------------------------------------------------------------------------
+    
+    call random_number(rand)
+
+    do n = 1, n_per_dir
+        do dir = 1, 4
+            do j = 1, j_max
+                do i = i, i_max
+
+                    cp  = cp_source(n)
+                    if (extrinsic) then
+                        u = uuu(i, j, q_max)
+                        v = vvv(i, j, q_max)
+                        cp = cp - cos_phi(dir) * u - sin_phi(dir) * v
+                    end if
+
+                    wvn_hor = omega_hat_source / cp
+                    k = wvn_hor * cos_phi(dir)
+                    l = wvn_hor * sin_phi(dir)
+
+                    m = get_m(k, l, coriolis(j))
+                    cg = get_cg_r(k, l, m)
+
+                    z_source = z_full(i, j, q_source) 
+                    prob = epsilon * cg * dt / dr_source
+                    s = (dir - 1) * n_per_dir + n
+
+                    if (rand(i, j, s) < prob) then
+                        launches(i, j, s)%r = z_source - 0.5 * dr_source
+                        launches(i, j, s)%dr = dr_source
+
+                        launches(i, j, s)%k = k
+                        launches(i, j, s)%l = l
+                        launches(i, j, s)%m = m
+
+                        launches(i, j, s)%dk = dk_source
+                        launches(i, j, s)%dl = dl_source
+                        launches(i, j, s)%dm = get_dm(m)
+
+                        volume = dk_source * dl_source * launches(i, j, s)%dm
+                        launches(i, j, s)%dens = flux_source(n) / abs( &
+                            wvn_hor * volume * cg &
+                        )
+
+                        launches(i, j, s)%age = 0
+                        launches(i, j, s)%meta = last_meta(i, j)
+                        last_meta(i, j) = last_meta(i, j) + 1
+
+                    else
+                        launches(i, j, s)%meta = -1
+                    end if
+                end do
+            end do
+        end do
+    end do
+
+
+end subroutine update_launches
+
+! ==============================================================================
+! time stepping
+! ==============================================================================
+
+subroutine check_boundaries(z_full, rays)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),        intent(in)    :: z_full
+    type(t_ray), dimension(:, :, :), intent(inout) :: rays
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i, j, n
+    type(t_ray) :: ray
+    logical :: delete
+    real :: cg, flux, volume, wvn
+
+    ! --------------------------------------------------------------------------
+
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                if (rays(i, j, n)%meta == -1) then
                     cycle
                 end if
 
-                r = rays(i, j, 1, n)
-                k = rays(i, j, 3, n)
-                l = rays(i, j, 4, n)
-                m = rays(i, j, 5, n)
+                ray = rays(i, j, n)
+                cg = get_cg_r(ray, coriolis(j))
 
-                drays_dt(i, j, 1, n) = get_cg_r(k, l, m, f_Cor(j))
-                drays_dt(i, j, 2, n) = 0
+                volume = ray%dk * ray%dl * ray%dm
+                wvn = sqrt(ray%k ** 2 + ray%l ** 2)
+                flux = wvn * ray%dens * volume * cg
 
-                drays_dt(i, j, 3, n) = 0
-                drays_dt(i, j, 4, n) = 0
+                delete = ray%r - 0.5 * ray%dr > z_full(i, j, 1)
+                delete = delete .or. (abs(flux) < min_flux)
+                delete = delete .or. ray%age > max_age
 
+                if (delete) then
+                    delete_at(i, j, n, rays)
+                end if
+            end do
+        end do
+    end do
+
+end subroutine check_boundaries
+
+subroutine take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),         intent(in)  :: z_full, uuu, vvv
+    real,                             intent(in)  :: dt
+    type(t_ray), dimension(:, :, :),  intent(out) :: rays
+    type(t_tend), dimension(:, :, :), intent(out) :: drays_dt
+    type(t_inc), dimension(:, :, :),  intent(out) :: increments
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: stage
+
+    ! --------------------------------------------------------------------------
+
+    call zero_increments(increments)
+
+    do stage = 1, 3
+        call update_tendencies(z_full, uuu, vvv, rays, drays_dt)
+        increments = As(step) * increments + dt * drays_dt
+        rays = rays + Bs(step) * increments
+    end do
+
+    rays(:, :, :)%age = rays(:, :, :)%age + dt
+
+end subroutine take_RK3_step
+
+subroutine update_tendencies(z_full, uuu, vvv, rays, drays_dt)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),         intent(in)  :: z_full, uuu, vvv
+    type(t_ray), dimension(:, :, :),  intent(in)  :: rays
+    type(t_tend), dimension(:, :, :), intent(out) :: drays_dt
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    type(t_ray) :: ray
+    real :: du_dr, dv_dr
+    integer :: i, j, n, q
+
+    ! --------------------------------------------------------------------------
+
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                if (rays(i, j, n)%meta == -1) then
+                    drays_dt(i, j, n)%r = 0
+                    drays_dt(i, j, n)%m = 0
+                    cycle
+                end if
+
+                ray = rays(i, j, n)
                 do q = 1, q_max - 1
                     z_hi = z_full(i, j, q)
                     z_lo = z_full(i, j, q + 1)
                     dz = z_hi - z_lo
 
-                    if ((z_lo < r) .and. (r < z_hi)) then
+                    if ((z_lo < ray%r) .and. (ray%r < z_hi)) then
                         du_dr = (uuu(i, j, q) - uuu(i, j, q + 1)) / dz
                         dv_dr = (vvv(i, j, q) - vvv(i, j, q + 1)) / dz
-
-                        drays_dt(i, j, 5, q) = -(k * du_dr + l * dv_dr)
                         exit
                     end if
                 end do
 
-                drays_dt(i, j, 6, n) = 0
-                drays_dt(i, j, 7, n) = 0
-                drays_dt(i, j, 8, n) = 0
-                drays_dt(i, j, 9, n) = 0
+                drays_dt(i, j, n)%r = get_cg_r(ray, coriolis(j))
+                drays_dt(i, j, n)%m = -(ray%k * du_dr + ray%l * dv_dr)
             end do
         end do
     end do
 
-end subroutine get_drays_dt
+end subroutine update_tendencies
 
-function get_launches(lat, z_full, uuu, vvv, dt) result(launches)
-    
-    ! ---------
+subroutine zero_increments(increments)
+
+    ! --------------------------------------------------------------------------
     ! arguments
-    ! ---------
-    real, dimension(:) :: lat
-    real, dimension(:, :, :) :: z_full, uuu, vvv
-    real :: dt
-    
-    real, dimension(:, :, :, :), allocatable :: launches
+    ! --------------------------------------------------------------------------
+    type(t_inc), dimension(:, :, :), intent(inout) :: increments
 
-    ! ---------------
+    ! --------------------------------------------------------------------------
     ! local variables
-    ! ---------------
-    integer :: i, j, n, p, q
-    integer :: bottom, i_max, j_max
-    real :: cos_phi, sin_phi
-    real :: prob
-    real, dimension(:, :, :), allocatable :: rand
-    real :: cg, cp, volume, wvn_hor
-    real :: k, l, m, dm, dens
-    real :: u, v
-    
-    i_max = size(uuu, 1)
-    j_max = size(uuu, 2)
-    bottom = size(uuu, 3)
+    ! --------------------------------------------------------------------------
+    integer :: i, j, n
 
-    allocate(launches(i_max, j_max, N_PROPS - 1, n_source))
-    allocate(rand(i_max, j_max, n_source))
-    call random_number(rand)
+    ! --------------------------------------------------------------------------
+
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                increments(i, j, n)%r = 0
+                increments(i, j, n)%m = 0
+            end do
+        end do
+    end do
+
+end subroutine zero_increments
+
+! ==============================================================================
+! flux calculations
+! ==============================================================================
+
+subroutine calc_accelerations(z_faces, p_full, temp, flux_x, flux_y, &
+    du_dt, dv_dt)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :), intent(in)  :: z_faces, temp, p_full, &
+        flux_x, flux_y
+    real, dimension(:, :, :), intent(out) :: du_dt, dv_dt
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i, j, q
+    real :: dFx_dz, dFy_dz, rho
+    ! --------------------------------------------------------------------------
+
+    do q = 1, q_max
+        do j = 1, j_max
+            do i = 1, i_max
+                dz = z_faces(i, j, q) - z_faces(i, j, q + 1)
+                dFx_dz = (flux_x(i, j, q) - flux_x(i, j, q + 1)) / dz
+                dFy_dz = (flux_y(i, j, q) - flux_y(i, j, q + 1)) / dz
+
+                rho = p_full(i, j, q) / temp(i, j, q) / RDGAS
+                du_dt(i, j, q) = -dFx_dz / rho
+                dv_dt(i, j, q) = -dFy_dz / rho
+            end do
+        end do
+    end do
+
+end subroutine calc_accelerations
+
+subroutine project(z_faces, values, rays, output)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),        intent(in)  :: z_faces
+    real, dimension(:, :, :),        intent(in)  :: values
+    type(t_ray), dimension(:, :, :), intent(in)  :: rays
+    real, dimension(:, :, :),        intent(out) :: output
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i, j, n, q
+    real :: r_lo, r_hi, frac
+    real :: z_lo, z_hi, dz
+
+    ! --------------------------------------------------------------------------
 
     do j = 1, j_max
         do i = 1, i_max
-            do n = 1, n_per_dir
-                do p = 1, 4
+            do n = 1, n_max
+                r_lo = rays(i, j, n)%r - 0.5 * rays(i, j, n)%dr
+                r_hi = rays(i, j, n)%r + 0.5 * rays(i, j, n)%dr
 
-                    cos_phi = cos(phi_source(p))
-                    sin_phi = sin(phi_source(p))
-                
-                    cp = cp_source(n)
-                    if (extrinsic) then
-                        u = uuu(i, j, bottom)
-                        v = vvv(i, j, bottom)
-                        cp = cp - cos_phi * u - sin_phi * v
+                do q = 1, q_max
+                    z_hi = z_faces(i, j, q)
+                    z_lo = z_faces(i, j, q + 1)
+                    dz = z_hi - z_lo
+
+                    if (r_hi < z_lo) then
+                        cycle
                     end if
 
-                    wvn_hor = omega_hat_source / cp
-                    k = wvn_hor * cos_phi
-                    l = wvn_hor * sin_phi
-
-                    m = get_m(k, l, f_Cor(j))
-                    cg = get_cg_r(k, l, m, f_Cor(j))
-                    dm = get_dm(m)
-
-                    volume = dk_source * dl_source * dm
-                    dens = flux_source(n) / abs(wvn_hor * volume * cg)
-
-                    prob = epsilon * cg * dt / dr_source
-                    q = (p - 1) * n_per_dir + n
-
-                    if (rand(i, j, q) < prob) then
-                        launches(i, j, 1, q) = z_full(i, j, k_source) - 0.5 * dr_source
-                        launches(i, j, 2, q) = dr_source
-
-                        launches(i, j, 3, q) = k
-                        launches(i, j, 4, q) = l
-                        launches(i, j, 5, q) = m
-
-                        launches(i, j, 6, q) = dk_source
-                        launches(i, j, 7, q) = dl_source
-                        launches(i, j, 8, q) = dm
-
-                        launches(i, j, 9, q) = dens
-                        launches(i, j, 10, q) = 0
-                    else
-                        launches(i, j, :, q) = -1
+                    if (r_lo > z_hi) then
+                        exit
                     end if
 
-                end do                
+                    frac = (min(r_hi, z_hi) - max(r_lo, z_lo)) / dz
+                    output(i, j, q) = output(i, j, q) + frac * values(i, j, n)
+                end do
             end do
         end do
     end do
 
-end function get_launches
+end subroutine project
 
-function get_cg_r(k, l, m, f) result(cg_r)
+subroutine update_faces(z_full, z_faces)
 
-    ! ---------
+    ! --------------------------------------------------------------------------
     ! arguments
-    ! ---------
-    real :: k, l, m, f
-    real :: cg_r
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :), intent(in)  :: z_full
+    real, dimension(:, :, :), intent(out) :: z_faces
 
-    ! ---------------
+    ! --------------------------------------------------------------------------
     ! local variables
-    ! ---------------
-    real :: omega_hat, wvn_sq
+    ! --------------------------------------------------------------------------
+    integer i, j, q
 
-    wvn_sq = k ** 2 + l ** 2 + m ** 2 + hgamma() ** 2
-    omega_hat = get_omega_hat(k, l, m, f)
+    ! --------------------------------------------------------------------------
 
-    cg_r = -m * (omega_hat ** 2 - f ** 2) / omega_hat / wvn_sq
+    do q = 2, q_max
+        do j = 1, j_max
+            do i = 1, i_max
+                z_faces(i, j, q) = 0.5 * (z_full(i, j, q - 1) + z_full(i, j, q))
+            end do
+        end do
+    end do
 
-end function get_cg_r
+    z_faces(:, :, 1) = (3 * z_full(:, :, 1) - z_full(:, :, 2)) / 2
+    z_faces(:, :, q_max + 1) = ( &
+        3 * z_full(:, :, q_max) - z_full(:, :, q_max - 1) &
+    ) / 2
 
-function get_m(k, l, f) result(m)
+end subroutine update_faces
 
-    ! ---------
+subroutine update_fluxes(z_faces, rays, flux_x, flux_y)
+
+    ! --------------------------------------------------------------------------
     ! arguments
-    ! ---------
-    real :: k, l, f, m
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),        intent(in)  :: z_faces
+    type(t_ray), dimension(:, :, :), intent(in)  :: rays
+    real, dimension(:, :, :),        intent(out) :: flux_x, flux_y
 
-    ! ---------------
+    ! --------------------------------------------------------------------------
     ! local variables
-    ! ---------------
-    real :: omega_hat_sq
+    ! --------------------------------------------------------------------------
+    real, dimension(size(rays, 1), size(rays, 2), size(rays, 3)) :: action_flux
+    integer :: i, j, n, q
+    real :: cg, volume
 
-    omega_hat_sq = omega_hat_source ** 2
-    m = -sqrt( &
-        (k ** 2 + l ** 2) * (N0 ** 2 - omega_hat_sq) / &
-        (omega_hat_sq - f ** 2) &
-    )
+    ! --------------------------------------------------------------------------
 
-end function get_m
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                cg = get_cg_r(rays(i, j, n), coriolis(j))
+                volume = rays(i, j, n)%dk * rays(i, j, n)%dl * rays(i, j, n)%dm
+                action_flux(i, j, n) = rays(i, j, n)%dens * volume * cg
+            end do
+        end do
+    end do
 
-function get_dm(m) result(dm)
-
-    ! ---------
-    ! arguments
-    ! ---------
-    real :: m, dm
-
-    dm = dc_source * (m ** 2) / N0
-
-end function get_dm
-
-real function hgamma()
-
-    hgamma = (1. / 2. - 2. / 7.) / H_rho
-
-end function hgamma
-
-function get_omega_hat(k, l, m, f) result(omega_hat)
-
-    ! ---------
-    ! arguments
-    ! ---------
-    real :: k, l, m, f
-    real :: omega_hat
-
-    ! ---------------
-    ! local variables
-    ! ---------------
-    real :: m2
-
-    m2 = (m ** 2) + (hgamma() ** 2)
-
-    omega_hat = sqrt( &
-        (N0 ** 2 * (k ** 2 + l ** 2) + f ** 2 * m2) / &
-        (k ** 2 + l ** 2 + m2) &
-    )
-
-end function get_omega_hat
+    call project(z_faces, rays(:, :, :)%k * action_flux, rays, flux_x)
+    call project(z_faces, rays(:, :, :)%l * action_flux, rays, flux_y)
+    
+end subroutine update_flxues
 
 end module cg_drag_mod

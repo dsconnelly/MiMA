@@ -1,5 +1,5 @@
 &coupler_nml
-   days   = 360,
+   days   = 30,
    dt_atmos =500,
    current_date = 0001,1,1,0,0,0
    calendar = 'thirty_day' /

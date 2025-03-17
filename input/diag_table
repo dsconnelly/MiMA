@@ -4,11 +4,12 @@
 "atmos_dmean",    24, "hours", 1, "days", "time",
 #diagnostic field entries. 
 # quantities needed for plevel interpolation,
- "dynamics",        "bk",         "bk",             "atmos_dmean",    "all", .false., "none", 2,
- "dynamics",        "pk",         "pk",             "atmos_dmean",    "all", .false., "none", 2,
- "dynamics",        "ps",         "ps",             "atmos_dmean",    "all", .false., "none", 2,
+ "dynamics",        "bk",         "bk",             "atmos_dmean",    "all", .true., "none", 2,
+ "dynamics",        "pk",         "pk",             "atmos_dmean",    "all", .true., "none", 2,
+ "dynamics",        "ps",         "ps",             "atmos_dmean",    "all", .true., "none", 2,
 # dynamics variables
  "dynamics",        "ucomp",      "ucomp",          "atmos_dmean",    "all", .true., "none", 2,
+ "dynamics",        "vcomp",      "vcomp",          "atmos_dmean",    "all", .true., "none", 2,
  "dynamics",        "temp",       "temp",           "atmos_dmean",    "all", .true., "none", 2,
  "dynamics",        "sphum",      "sphum",          "atmos_dmean",    "all", .true., "none", 2,
 # moisture variables
