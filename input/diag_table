@@ -12,6 +12,9 @@
  "dynamics",        "vcomp",      "vcomp",          "atmos_dmean",    "all", .true., "none", 2,
  "dynamics",        "temp",       "temp",           "atmos_dmean",    "all", .true., "none", 2,
  "dynamics",        "sphum",      "sphum",          "atmos_dmean",    "all", .true., "none", 2,
+# gravity wave variables
+ "cg_drag",         "gw_flux_x",  "gw_flux_x",      "atmos_dmean",    "all", .true., "none", 2,
+ "cg_drag",         "gw_flux_y",  "gw_flux_y",      "atmos_dmean",    "all", .true., "none", 2,
 # moisture variables
   "moist",          "precip",     "precip",         "atmos_dmean",    "all", .true., "none", 2,
 #=============================================================================================

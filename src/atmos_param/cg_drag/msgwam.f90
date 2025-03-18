@@ -7,6 +7,7 @@ module cg_drag_mod
 ! ==============================================================================
 
 use constants_mod,    only: constants_init, PI, RDGAS
+use diag_manager_mod, only: diag_manager_init, register_diag_field, send_data
 use fms_mod,          only: check_nml_error, close_file, error_mesg, FATAL, &
                             file_exist, fms_init, mpp_pe, mpp_root_pe, &
                             open_namelist_file, stdlog, write_version_number
@@ -41,18 +42,19 @@ integer :: max_age = 10 * 86400
 real :: min_flux = 1.e-8
 integer :: n_max = 2500
 integer :: n_source = 48
+real :: padding_z = 500.
 real :: source_pressure = 300.e+2
 real :: T_hat_source = 10. * 3600
 
 ! The scheme should eventually be rewritten to calculate these values from the
 ! mean flow, but for now the ray tracer treats them as constants. 
-real :: H_rho = 8.e3
+real :: H_rho = 8.e+3
 real :: N0 = 0.015
 
 namelist / cg_drag_nml / &
     boundary_flux, dr_source, cp_center, cp_max, cp_width, dk_source, &
     dl_source, epsilon, extrinsic, max_age, min_flux, n_max, n_source, &
-    source_pressure, T_hat_source, H_rho, N0
+    padding_z, source_pressure, T_hat_source, H_rho, N0
 
 ! ==============================================================================
 ! module-level private variables
@@ -72,11 +74,13 @@ type :: t_tend
 end type t_tend
 
 interface operator (+)
+    module procedure add_inc_inc
     module procedure add_ray_inc
 end interface
 
 interface operator (*)
-    module procedure mult_scalar_inc, mult_scalar_tend
+    module procedure mult_scalar_inc
+    module procedure mult_scalar_tend
 end interface
 
 interface get_cg_r
@@ -97,10 +101,10 @@ type(t_ray), dimension(:, :, :), allocatable :: launches
 integer :: n_per_dir
 real :: dc_source, omega_hat_source
 real, dimension(4) :: cos_phi, sin_phi
-real, dimension(:), allocatable, cp_source, flux_source
+real, dimension(:), allocatable :: cp_source, flux_source
 integer, dimension(:, :), allocatable :: last_meta
 
-real, dimension(:, :, :), allocatable :: flux_x, flux_y, z_faces
+real, dimension(:, :, :), allocatable :: flux_x, flux_y, z_faces, z_padded
 
 real :: hgamma
 integer :: q_source
@@ -109,6 +113,10 @@ integer :: i_max, j_max, q_max
 
 real, dimension(3) :: As = (/ 0., -5. / 9., -153. / 128. /)
 real, dimension(3) :: Bs = (/ 1. / 3., 15. / 16., 8. / 15. /)
+
+character(len=7) :: mod_name = "cg_drag"
+integer :: id_flux_x, id_flux_y, id_accel_x, id_accel_y
+real, parameter :: missing_value = -999.
 
 logical :: is_initialized = .false.
 
@@ -123,15 +131,16 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:), intent(in) :: lon_bounds, lat_bounds, p_ref
-    type(time_type),    intent(in) :: Time
-    real, dimension(4), intent(in) :: axes
+    real, dimension(:),    intent(in) :: lon_bounds, lat_bounds, p_ref
+    type(time_type),       intent(in) :: Time
+    integer, dimension(4), intent(in) :: axes
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i_err, io, log_unit, nml_unit
     integer :: j, q
+    real :: lat
 
     ! --------------------------------------------------------------------------
 
@@ -141,7 +150,7 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
 
     call fms_init
     call time_manager_init
-    call constants_int
+    call constants_init
 
     if (file_exist("input.nml")) then
         nml_unit = open_namelist_file()
@@ -171,11 +180,14 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(increments(i_max, j_max, n_max))
     allocate(launches(i_max, j_max, n_source))
 
-    allocate(flux_x(i_max, j_max, q_max))
-    allocate(flux_y(i_max, j_max, q_max))
+    allocate(flux_x(i_max, j_max, q_max + 1))
+    allocate(flux_y(i_max, j_max, q_max + 1))
     allocate(z_faces(i_max, j_max, q_max + 1))
+    allocate(z_padded(i_max, j_max, q_max + 2))
 
     rays(:, :, :)%meta = -1
+    allocate(last_meta(i_max, j_max))
+    last_meta = 0
 
     do q = 1, q_max
         if (p_ref(q) > source_pressure) then
@@ -195,6 +207,7 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     hgamma = (1. / 2. - 2. / 7.) * H_rho
 
     call init_source
+    call init_nc_output(axes, Time)
 
 end subroutine cg_drag_init
 
@@ -213,18 +226,17 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
     real, dimension(:, :, :), intent(out) :: du_dt, dv_dt
 
     ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-
-    ! --------------------------------------------------------------------------
 
     call take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
     call check_boundaries(z_full, rays)
     call check_source(z_full, uuu, vvv, dt, rays)
 
-    call update_faces(z_full, z_faces)
-    call update_fluxes(z_faces, rays, flux_x, flux_y)
+    call pad_grid(z_full, z_faces)
+    call pad_grid(z_faces, z_padded)
+
+    call update_fluxes(z_padded, rays, flux_x, flux_y)
     call calc_accelerations(z_faces, p_full, temp, flux_x, flux_y, du_dt, dv_dt)
+    call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine cg_drag_calc
 
@@ -235,10 +247,85 @@ subroutine cg_drag_end
 end subroutine cg_drag_end
 
 ! ==============================================================================
+! netCDF output
+! ==============================================================================
+
+subroutine init_nc_output(axes, Time)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    integer, dimension(4), intent(in) :: axes
+    type(time_type),       intent(in) :: Time
+
+    ! --------------------------------------------------------------------------
+
+    id_flux_x = register_diag_field(mod_name, "gw_flux_x", axes(1:3), Time, &
+        "zonal GW flux", "Pa", missing_value=missing_value)
+    id_flux_y = register_diag_field(mod_name, "gw_flux_y", axes(1:3), Time, &
+        "meridional GW flux", "Pa", missing_value=missing_value)
+
+    id_accel_x = register_diag_field(mod_name, "gw_accel_x", axes(1:3), Time, &
+        "zonal GW acceleration", "m/s^2", missing_value=missing_value)
+    id_accel_y = register_diag_field(mod_name, "gw_accel_y", axes(1:3), Time, &
+        "meridional GW acceleration", "m/s^2", missing_value=missing_value)
+
+end subroutine init_nc_output
+
+subroutine send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    integer,                  intent(in) :: i_start, j_start
+    type(time_type),          intent(in) :: Time
+    real, dimension(:, :, :), intent(in) :: flux_x, flux_y, du_dt, dv_dt
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i_err
+
+    ! --------------------------------------------------------------------------
+
+    if (id_flux_x > 0) then
+        i_err = send_data(id_flux_x, flux_x(:, :, 2:), Time, i_start, j_start)
+    end if
+
+    if (id_flux_y > 0) then
+        i_err = send_data(id_flux_x, flux_y(:, :, 2:), Time, i_start, j_start)
+    end if
+
+    if (id_accel_x > 0) then
+        i_err = send_data(id_accel_x, du_dt, Time, i_start, j_start)
+    end if
+
+    if (id_accel_y > 0) then
+        i_err = send_data(id_accel_x, dv_dt, Time, i_start, j_start)
+    end if
+
+end subroutine send_nc_output
+
+! ==============================================================================
 ! type(t_ray) and type(t_tend) helpers
 ! ==============================================================================
 
-type(t_ray) function add_ray_inc(ray, inc) result(out)
+elemental function add_inc_inc(a, b) result(out)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    type(t_inc), intent(in) :: a, b
+    type(t_inc)             :: out
+
+    ! --------------------------------------------------------------------------
+
+    out%r = a%r + b%r
+    out%m = a%m + b%m
+
+end function add_inc_inc
+
+elemental function add_ray_inc(ray, inc) result(out)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -247,13 +334,10 @@ type(t_ray) function add_ray_inc(ray, inc) result(out)
     type(t_inc), intent(in) :: inc
     type(t_ray)             :: out
 
-    type(t_ray), intent(in) :: a, b
-    type(t_inc)             :: c
-
     ! --------------------------------------------------------------------------
 
-    ray%r = ray%r + inc%r
-    ray%m = ray%m + inc%m
+    out%r = ray%r + inc%r
+    out%m = ray%m + inc%m
 
 end function add_ray_inc
 
@@ -284,7 +368,7 @@ subroutine delete_at(i, j, n, rays)
 
 end subroutine delete_at
 
-type(t_inc) function mult_scalar_inc(c, inc) result(out)
+elemental function mult_scalar_inc(c, inc) result(out)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -300,7 +384,7 @@ type(t_inc) function mult_scalar_inc(c, inc) result(out)
 
 end function mult_scalar_inc
 
-type(t_inc) function mult_scalar_tend(c, tend) result(inc)
+elemental function mult_scalar_tend(c, tend) result(inc)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -320,7 +404,7 @@ end function mult_scalar_tend
 ! dispersion relation
 ! ==============================================================================
 
-real function cg_r_from_ray(ray, f) result(cg_r)
+function cg_r_from_ray(ray, f) result(cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -335,7 +419,7 @@ real function cg_r_from_ray(ray, f) result(cg_r)
 
 end function cg_r_from_ray
 
-real function cg_r_from_reals(k, l, m, f) result(cg_r)
+function cg_r_from_reals(k, l, m, f) result(cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -353,13 +437,13 @@ real function cg_r_from_reals(k, l, m, f) result(cg_r)
     ! --------------------------------------------------------------------------
 
     wvn_sq = k ** 2 + l ** 2 + m ** 2 + hgamma ** 2
-    omega_hat = get_omega_hat(ray, f)
+    omega_hat = get_omega_hat(k, l, m, f)
 
     cg_r = -m * (omega_hat ** 2 - f ** 2) / omega_hat / wvn_sq
 
 end function cg_r_from_reals
 
-real function get_dm(m) result(dm)
+function get_dm(m) result(dm)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -373,7 +457,7 @@ real function get_dm(m) result(dm)
 
 end function get_dm
 
-real function get_m(k, l, f) result(m)
+function get_m(k, l, f) result(m)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -396,7 +480,7 @@ real function get_m(k, l, f) result(m)
 
 end function get_m
 
-real function omega_hat_from_ray(ray, f) result(omega_hat)
+function omega_hat_from_ray(ray, f) result(omega_hat)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -411,7 +495,7 @@ real function omega_hat_from_ray(ray, f) result(omega_hat)
 
 end function omega_hat_from_ray
 
-real function omega_hat_from_reals(k, l, m, f) result(omega_hat)
+function omega_hat_from_reals(k, l, m, f) result(omega_hat)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
@@ -451,7 +535,7 @@ subroutine check_source(z_full, uuu, vvv, dt, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer, dimension(size(uuu, 1), size(uuu, 2)) :: n_active, n_excess
-    integer :: i, j, n, s
+    integer :: add_at, i, j, n, s
     ! --------------------------------------------------------------------------
 
     call update_launches(z_full, uuu, vvv, dt, last_meta, launches)
@@ -521,8 +605,7 @@ subroutine find_lowest(values, n_find, idx)
     ! --------------------------------------------------------------------------
     integer :: i, j, n
     integer :: add_at, s
-    real, dimension(size(values, 1), size(values, 2), size(idx, 3)), &
-        allocatable :: lowest
+    real, dimension(size(values, 1), size(values, 2), size(idx, 3)) :: lowest
 
     ! --------------------------------------------------------------------------
 
@@ -562,9 +645,8 @@ subroutine init_source
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-
     integer :: n
-    real :: phi, total
+    real :: arg, phi, total
 
     ! --------------------------------------------------------------------------
 
@@ -587,7 +669,7 @@ subroutine init_source
     end do
 
     total = sum(flux_source)
-    flux_source = flux_source * (bc_flux / 4) / total
+    flux_source = flux_source * (boundary_flux / 4) / total
     omega_hat_source = 2 * PI / T_hat_source
 
 end subroutine init_source
@@ -672,7 +754,7 @@ subroutine update_launches(z_full, uuu, vvv, dt, last_meta, launches)
                     l = wvn_hor * sin_phi(dir)
 
                     m = get_m(k, l, coriolis(j))
-                    cg = get_cg_r(k, l, m)
+                    cg = get_cg_r(k, l, m, coriolis(j))
 
                     z_source = z_full(i, j, q_source) 
                     prob = epsilon * cg * dt / dr_source
@@ -751,7 +833,7 @@ subroutine check_boundaries(z_full, rays)
                 delete = delete .or. ray%age > max_age
 
                 if (delete) then
-                    delete_at(i, j, n, rays)
+                    call delete_at(i, j, n, rays)
                 end if
             end do
         end do
@@ -764,11 +846,11 @@ subroutine take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :),         intent(in)  :: z_full, uuu, vvv
-    real,                             intent(in)  :: dt
-    type(t_ray), dimension(:, :, :),  intent(out) :: rays
-    type(t_tend), dimension(:, :, :), intent(out) :: drays_dt
-    type(t_inc), dimension(:, :, :),  intent(out) :: increments
+    real, dimension(:, :, :),         intent(in)    :: z_full, uuu, vvv
+    real,                             intent(in)    :: dt
+    type(t_ray), dimension(:, :, :),  intent(inout) :: rays
+    type(t_tend), dimension(:, :, :), intent(out)   :: drays_dt
+    type(t_inc), dimension(:, :, :),  intent(out)   :: increments
 
     ! --------------------------------------------------------------------------
     ! local variables
@@ -781,8 +863,8 @@ subroutine take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
 
     do stage = 1, 3
         call update_tendencies(z_full, uuu, vvv, rays, drays_dt)
-        increments = As(step) * increments + dt * drays_dt
-        rays = rays + Bs(step) * increments
+        increments = As(stage) * increments + dt * drays_dt
+        rays = rays + Bs(stage) * increments
     end do
 
     rays(:, :, :)%age = rays(:, :, :)%age + dt
@@ -803,6 +885,7 @@ subroutine update_tendencies(z_full, uuu, vvv, rays, drays_dt)
     ! --------------------------------------------------------------------------
     type(t_ray) :: ray
     real :: du_dr, dv_dr
+    real :: z_hi, z_lo, dz
     integer :: i, j, n, q
 
     ! --------------------------------------------------------------------------
@@ -842,7 +925,7 @@ subroutine zero_increments(increments)
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    type(t_inc), dimension(:, :, :), intent(inout) :: increments
+    type(t_inc), dimension(:, :, :), intent(out) :: increments
 
     ! --------------------------------------------------------------------------
     ! local variables
@@ -880,7 +963,7 @@ subroutine calc_accelerations(z_faces, p_full, temp, flux_x, flux_y, &
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, q
-    real :: dFx_dz, dFy_dz, rho
+    real :: dz, dFx_dz, dFy_dz, rho
     ! --------------------------------------------------------------------------
 
     do q = 1, q_max
@@ -946,42 +1029,42 @@ subroutine project(z_faces, values, rays, output)
 
 end subroutine project
 
-subroutine update_faces(z_full, z_faces)
+subroutine pad_grid(z_in, z_out)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :), intent(in)  :: z_full
-    real, dimension(:, :, :), intent(out) :: z_faces
+    real, dimension(:, :, :), intent(in)  :: z_in
+    real, dimension(:, :, :), intent(out) :: z_out
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer i, j, q
+    integer :: i, j, q, n_q
 
     ! --------------------------------------------------------------------------
 
-    do q = 2, q_max
+    n_q = size(z_in, 3)
+
+    do q = 2, n_q
         do j = 1, j_max
             do i = 1, i_max
-                z_faces(i, j, q) = 0.5 * (z_full(i, j, q - 1) + z_full(i, j, q))
+                z_out(i, j, q) = 0.5 * (z_in(i, j, q - 1) + z_in(i, j, q))
             end do
         end do
     end do
 
-    z_faces(:, :, 1) = (3 * z_full(:, :, 1) - z_full(:, :, 2)) / 2
-    z_faces(:, :, q_max + 1) = ( &
-        3 * z_full(:, :, q_max) - z_full(:, :, q_max - 1) &
-    ) / 2
+    z_out(:, :, 1) = z_in(:, :, 1) - padding_z
+    z_out(:, :, n_q + 1) = z_in(:, :, n_q) + padding_z
 
-end subroutine update_faces
+end subroutine pad_grid
 
-subroutine update_fluxes(z_faces, rays, flux_x, flux_y)
+subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :),        intent(in)  :: z_faces
+    real, dimension(:, :, :),        intent(in)  :: z_padded
     type(t_ray), dimension(:, :, :), intent(in)  :: rays
     real, dimension(:, :, :),        intent(out) :: flux_x, flux_y
 
@@ -1004,9 +1087,9 @@ subroutine update_fluxes(z_faces, rays, flux_x, flux_y)
         end do
     end do
 
-    call project(z_faces, rays(:, :, :)%k * action_flux, rays, flux_x)
-    call project(z_faces, rays(:, :, :)%l * action_flux, rays, flux_y)
+    call project(z_padded, rays(:, :, :)%k * action_flux, rays, flux_x)
+    call project(z_padded, rays(:, :, :)%l * action_flux, rays, flux_y)
     
-end subroutine update_flxues
+end subroutine update_fluxes
 
 end module cg_drag_mod
