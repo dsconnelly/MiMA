@@ -100,9 +100,11 @@ type(t_ray), dimension(:, :, :), allocatable :: launches
 
 integer :: n_per_dir
 real :: dc_source, omega_hat_source
-real, dimension(4) :: cos_phi, sin_phi
 real, dimension(:), allocatable :: cp_source, flux_source
 integer, dimension(:, :), allocatable :: last_meta
+
+real, dimension(4) :: cos_phi = (/ 1., 0., -1., 0. /)
+real, dimension(4) :: sin_phi = (/ 0., 1., 0., -1. /)
 
 real, dimension(:, :, :), allocatable :: flux_x, flux_y, z_faces, z_padded
 
@@ -204,7 +206,7 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     end do
 
     ! When H_rho is computed correctly, this will have to be rewritten.
-    hgamma = (1. / 2. - 2. / 7.) * H_rho
+    hgamma = (1. / 2. - 2. / 7.) / H_rho
 
     call init_source
     call init_nc_output(axes, Time)
@@ -226,6 +228,9 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
     real, dimension(:, :, :), intent(out) :: du_dt, dv_dt
 
     ! --------------------------------------------------------------------------
+
+    flux_x = 0.
+    flux_y = 0.
 
     call take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
     call check_boundaries(z_full, rays)
@@ -336,6 +341,7 @@ elemental function add_ray_inc(ray, inc) result(out)
 
     ! --------------------------------------------------------------------------
 
+    out = ray
     out%r = ray%r + inc%r
     out%m = ray%m + inc%m
 
@@ -650,12 +656,6 @@ subroutine init_source
 
     ! --------------------------------------------------------------------------
 
-    do n = 1, 4
-        phi = (n - 1) * PI / 2
-        cos_phi(n) = cos(phi)
-        sin_phi(n) = sin(phi)
-    end do
-
     n_per_dir = n_source / 4
     dc_source = cp_max / n_per_dir
 
@@ -740,7 +740,7 @@ subroutine update_launches(z_full, uuu, vvv, dt, last_meta, launches)
     do n = 1, n_per_dir
         do dir = 1, 4
             do j = 1, j_max
-                do i = i, i_max
+                do i = 1, i_max
 
                     cp  = cp_source(n)
                     if (extrinsic) then
@@ -1054,8 +1054,8 @@ subroutine pad_grid(z_in, z_out)
         end do
     end do
 
-    z_out(:, :, 1) = z_in(:, :, 1) - padding_z
-    z_out(:, :, n_q + 1) = z_in(:, :, n_q) + padding_z
+    z_out(:, :, 1) = z_in(:, :, 1) + padding_z
+    z_out(:, :, n_q + 1) = z_in(:, :, n_q) - padding_z
 
 end subroutine pad_grid
 
@@ -1080,6 +1080,10 @@ subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
     do n = 1, n_max
         do j = 1, j_max
             do i = 1, i_max
+                if (rays(i, j, n)%meta == -1) then
+                    cycle
+                end if
+
                 cg = get_cg_r(rays(i, j, n), coriolis(j))
                 volume = rays(i, j, n)%dk * rays(i, j, n)%dl * rays(i, j, n)%dm
                 action_flux(i, j, n) = rays(i, j, n)%dens * volume * cg
