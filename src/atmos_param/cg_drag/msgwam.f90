@@ -605,14 +605,15 @@ subroutine check_source(z_full, uuu, vvv, dt, rays)
     end do
 end subroutine check_source
 
-subroutine find_lowest(values, n_find, idx)
+subroutine find_lowest(values, n_find, rays, idx)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :),    intent(in)  :: values
-    integer, dimension(:, :),    intent(in)  :: n_find
-    integer, dimension(:, :, :), intent(out) :: idx
+    real, dimension(:, :, :),        intent(in)  :: values
+    integer, dimension(:, :),        intent(in)  :: n_find
+    type(t_ray), dimension(:, :, :), intent(in)  :: rays
+    integer, dimension(:, :, :),     intent(out) :: idx
 
     ! --------------------------------------------------------------------------
     ! local variables
@@ -628,6 +629,9 @@ subroutine find_lowest(values, n_find, idx)
     do n = 1, n_max
         do j = 1, j_max
             do i = 1, i_max
+                if (rays(i, j, n)%meta == -1) then
+                    cycle
+                end if
 
                 add_at = -1
                 do s = 1, n_find(i, j)
@@ -644,6 +648,7 @@ subroutine find_lowest(values, n_find, idx)
 
                 do s = 1, add_at - 1
                     lowest(i, j, s) = lowest(i, j, s + 1)
+                    idx(i, j, s) = idx(i, j, s + 1)
                 end do
 
                 lowest(i, j, add_at) = values(i, j, n)
@@ -703,6 +708,10 @@ subroutine prune(n_excess, rays)
     do n = 1, n_max
         do j = 1, j_max
             do i = 1, i_max
+                if (rays(i, j, n)%meta == -1) then
+                    cycle
+                end if
+
                 omega_hat = get_omega_hat(rays(i, j, n), coriolis(j))
                 volume = rays(i, j, n)%dk * rays(i, j, n)%dl * rays(i, j, n)%dm
                 energy(i, j, n) = rays(i, j, n)%dens * volume * omega_hat
@@ -711,7 +720,7 @@ subroutine prune(n_excess, rays)
     end do
 
     allocate(idx(i_max, j_max, maxval(n_excess)))
-    call find_lowest(energy, n_excess, idx)
+    call find_lowest(energy, n_excess, rays, idx)
 
     do j = 1, j_max
         do i = 1, i_max
