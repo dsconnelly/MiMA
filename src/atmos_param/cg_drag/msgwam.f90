@@ -40,11 +40,13 @@ real :: epsilon = 1.
 logical :: extrinsic = .true.
 integer :: max_age = 10 * 86400
 real :: min_flux = 1.e-8
+real :: mu = 1.e-3
 integer :: n_max = 2500
 integer :: n_source = 48
 real :: padding_z = 500.
 real :: source_pressure = 300.e+2
 real :: T_hat_source = 10. * 3600
+logical :: use_shapiro_filter = .true.
 
 ! The scheme should eventually be rewritten to calculate these values from the
 ! mean flow, but for now the ray tracer treats them as constants. 
@@ -53,8 +55,8 @@ real :: N0 = 0.015
 
 namelist / cg_drag_nml / &
     boundary_flux, dr_source, cp_center, cp_max, cp_width, dk_source, &
-    dl_source, epsilon, extrinsic, max_age, min_flux, n_max, n_source, &
-    padding_z, source_pressure, T_hat_source, H_rho, N0
+    dl_source, epsilon, extrinsic, max_age, min_flux, mu, n_max, n_source, &
+    padding_z, source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
 
 ! ==============================================================================
 ! module-level private variables
@@ -106,7 +108,9 @@ integer, dimension(:, :), allocatable :: last_meta
 real, dimension(4) :: cos_phi = (/ 1., 0., -1., 0. /)
 real, dimension(4) :: sin_phi = (/ 0., 1., 0., -1. /)
 
-real, dimension(:, :, :), allocatable :: flux_x, flux_y, z_faces, z_padded
+real, dimension(:, :, :), allocatable :: flux_x, flux_y
+real, dimension(:, :, :), allocatable :: z_faces, z_padded
+real, dimension(:, :, :), allocatable :: rho
 
 real :: hgamma
 integer :: q_source
@@ -186,6 +190,7 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(flux_y(i_max, j_max, q_max + 1))
     allocate(z_faces(i_max, j_max, q_max + 1))
     allocate(z_padded(i_max, j_max, q_max + 2))
+    allocate(rho(i_max, j_max, q_max))
 
     rays(:, :, :)%meta = -1
     allocate(last_meta(i_max, j_max))
@@ -232,15 +237,18 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
     flux_x = 0.
     flux_y = 0.
 
+    call pad_grid(z_full, z_faces)
+    call pad_grid(z_faces, z_padded)
+    call update_rho(p_full, temp, rho)
+
     call take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
+    call apply_dissipation(z_full, rho, dt, rays)
+
     call check_boundaries(z_full, rays)
     call check_source(z_full, uuu, vvv, dt, rays)
 
-    call pad_grid(z_full, z_faces)
-    call pad_grid(z_faces, z_padded)
-
     call update_fluxes(z_padded, rays, flux_x, flux_y)
-    call calc_accelerations(z_faces, p_full, temp, flux_x, flux_y, du_dt, dv_dt)
+    call calc_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
     call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine cg_drag_calc
@@ -796,6 +804,77 @@ end subroutine update_launches
 ! time stepping
 ! ==============================================================================
 
+subroutine apply_dissipation(z_full, rho, dt, rays)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),        intent(in)    :: z_full, rho
+    real,                            intent(in)    :: dt
+    type(t_ray), dimension(:, :, :), intent(inout) :: rays
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i, j, n, q
+    real :: r, wvn_sq, z_lo, z_hi
+    real :: damping, nu, nu_hi, nu_lo, omega_hat
+
+    ! --------------------------------------------------------------------------
+
+    if (mu == 0) then
+        return
+    end if
+
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                if (rays(i, j, n)%meta == -1) then
+                    cycle
+                end if
+
+                nu = 0
+                r = rays(i, j, n)%r
+
+                do q = 1, q_max - 1
+                    z_hi = z_full(i, j, q)
+                    z_lo = z_full(i, j, q + 1)
+
+                    if ((z_lo < r) .and. (r < z_hi)) then
+                        nu_hi = mu / rho(i, j, q)
+                        nu_lo = mu / rho(i, j, q + 1)
+
+                        nu = (&
+                            (nu_lo * (z_hi - r) + nu_hi * (r - z_lo)) / &
+                            (z_hi - z_lo) &
+                        )
+
+                        exit
+                    end if
+                end do
+
+                if (nu == 0) then
+                    cycle
+                end if
+
+                wvn_sq = (&
+                    rays(i, j, n)%k ** 2 + &
+                    rays(i, j, n)%l ** 2 + &
+                    rays(i, j, n)%m ** 2 &
+                )
+
+                omega_hat = get_omega_hat(rays(i, j, n), coriolis(j))
+                damping = nu * wvn_sq * ( &
+                    1 + coriolis(j) ** 2 / omega_hat ** 2 &
+                )
+
+                rays(i, j, n)%dens = rays(i, j, n)%dens * exp(-dt * damping)
+            end do
+        end do
+    end do
+
+end subroutine
+
 subroutine check_boundaries(z_full, rays)
 
     ! --------------------------------------------------------------------------
@@ -949,21 +1028,19 @@ end subroutine zero_increments
 ! flux calculations
 ! ==============================================================================
 
-subroutine calc_accelerations(z_faces, p_full, temp, flux_x, flux_y, &
-    du_dt, dv_dt)
+subroutine calc_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :), intent(in)  :: z_faces, temp, p_full, &
-        flux_x, flux_y
+    real, dimension(:, :, :), intent(in)  :: z_faces, rho, flux_x, flux_y
     real, dimension(:, :, :), intent(out) :: du_dt, dv_dt
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, q
-    real :: dz, dFx_dz, dFy_dz, rho
+    real :: dz, dFx_dz, dFy_dz
     ! --------------------------------------------------------------------------
 
     do q = 1, q_max
@@ -973,9 +1050,8 @@ subroutine calc_accelerations(z_faces, p_full, temp, flux_x, flux_y, &
                 dFx_dz = (flux_x(i, j, q) - flux_x(i, j, q + 1)) / dz
                 dFy_dz = (flux_y(i, j, q) - flux_y(i, j, q + 1)) / dz
 
-                rho = p_full(i, j, q) / temp(i, j, q) / RDGAS
-                du_dt(i, j, q) = -dFx_dz / rho
-                dv_dt(i, j, q) = -dFy_dz / rho
+                du_dt(i, j, q) = -dFx_dz / rho(i, j, q)
+                dv_dt(i, j, q) = -dFy_dz / rho(i, j, q)
             end do
         end do
     end do
@@ -1004,6 +1080,10 @@ subroutine project(z_faces, values, rays, output)
     do j = 1, j_max
         do i = 1, i_max
             do n = 1, n_max
+                if (rays(i, j, n)%meta == -1) then
+                    cycle
+                end if
+
                 r_lo = rays(i, j, n)%r - 0.5 * rays(i, j, n)%dr
                 r_hi = rays(i, j, n)%r + 0.5 * rays(i, j, n)%dr
 
@@ -1029,35 +1109,37 @@ subroutine project(z_faces, values, rays, output)
 
 end subroutine project
 
-subroutine pad_grid(z_in, z_out)
+subroutine shapiro_filter(profile)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :), intent(in)  :: z_in
-    real, dimension(:, :, :), intent(out) :: z_out
+    real, dimension(:, :, :), intent(inout) :: profile
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, j, q, n_q
+    real, dimension(:, :), allocatable :: previous, filtered
+    integer :: i, j, q, q_max
 
     ! --------------------------------------------------------------------------
 
-    n_q = size(z_in, 3)
+    q_max = size(profile, 3)
+    allocate(previous(i_max, j_max))
+    allocate(filtered(i_max, j_max))
 
-    do q = 2, n_q
-        do j = 1, j_max
-            do i = 1, i_max
-                z_out(i, j, q) = 0.5 * (z_in(i, j, q - 1) + z_in(i, j, q))
-            end do
-        end do
+    previous = profile(:, :, 1)
+    profile(:, :, 1) = (3 * profile(:, :, 1) + profile(:, :, 2)) / 4
+
+    do q = 2, q_max - 1
+        filtered = (previous + 2 * profile(:, :, q) + profile(:, :, q + 1)) / 4
+        previous = profile(:, :, q)
+        profile(:, :, q) = filtered
     end do
 
-    z_out(:, :, 1) = z_in(:, :, 1) + padding_z
-    z_out(:, :, n_q + 1) = z_in(:, :, n_q) - padding_z
+    profile(:, :, q_max) = (previous + 3 * profile(:, :, q_max)) / 4
 
-end subroutine pad_grid
+end subroutine shapiro_filter
 
 subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
 
@@ -1093,7 +1175,71 @@ subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
 
     call project(z_padded, rays(:, :, :)%k * action_flux, rays, flux_x)
     call project(z_padded, rays(:, :, :)%l * action_flux, rays, flux_y)
-    
+
+    if (use_shapiro_filter) then
+        call shapiro_filter(flux_x)
+        call shapiro_filter(flux_y)
+    end if
+
 end subroutine update_fluxes
+
+! ==============================================================================
+! mean state calculations
+! ==============================================================================
+
+subroutine pad_grid(z_in, z_out)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :), intent(in)  :: z_in
+    real, dimension(:, :, :), intent(out) :: z_out
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i, j, q, q_max
+
+    ! --------------------------------------------------------------------------
+
+    q_max = size(z_in, 3)
+
+    do q = 2, q_max
+        do j = 1, j_max
+            do i = 1, i_max
+                z_out(i, j, q) = 0.5 * (z_in(i, j, q - 1) + z_in(i, j, q))
+            end do
+        end do
+    end do
+
+    z_out(:, :, 1) = z_in(:, :, 1) + padding_z
+    z_out(:, :, q_max + 1) = z_in(:, :, q_max) - padding_z
+
+end subroutine pad_grid
+
+subroutine update_rho(p_full, temp, rho)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :), intent(in)  :: p_full, temp
+    real, dimension(:, :, :), intent(out) :: rho
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i, j, q
+
+    ! --------------------------------------------------------------------------
+
+    do q = 1, q_max
+        do j = 1, j_max
+            do i = 1, i_max
+                rho(i, j, q) = p_full(i, j, q) / RDGAS / temp(i, j, q)
+            end do
+        end do
+    end do
+    
+end subroutine update_rho
 
 end module cg_drag_mod
