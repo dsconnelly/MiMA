@@ -30,6 +30,7 @@ public cg_drag_calc, cg_drag_end, cg_drag_init
 ! ==============================================================================
 
 real :: boundary_flux = 0.01
+logical :: break_waves = .true.
 real :: dr_source = 1000.
 real :: cp_center = 15.
 real :: cp_max = 50.
@@ -54,9 +55,10 @@ real :: H_rho = 8.e+3
 real :: N0 = 0.015
 
 namelist / cg_drag_nml / &
-    boundary_flux, dr_source, cp_center, cp_max, cp_width, dk_source, &
-    dl_source, epsilon, extrinsic, max_age, min_flux, mu, n_max, n_source, &
-    padding_z, source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
+    boundary_flux, break_waves, dr_source, cp_center, cp_max, cp_width, & 
+    dk_source, dl_source, epsilon, extrinsic, max_age, min_flux, mu, n_max, &
+    n_source, padding_z, source_pressure, T_hat_source, use_shapiro_filter, &
+    H_rho, N0
 
 ! ==============================================================================
 ! module-level private variables
@@ -243,6 +245,7 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
 
     call take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
     call apply_dissipation(z_full, rho, dt, rays)
+    call apply_breaking(z_faces, rho, rays)
 
     call check_boundaries(z_full, rays)
     call check_source(z_full, uuu, vvv, dt, rays)
@@ -812,6 +815,96 @@ end subroutine update_launches
 ! ==============================================================================
 ! time stepping
 ! ==============================================================================
+
+subroutine apply_breaking(z_faces, rho, rays)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:, :, :),        intent(in)    :: z_faces, rho
+    type(t_ray), dimension(:, :, :), intent(inout) :: rays
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    real, dimension(size(rays, 1), size(rays, 2), size(rays, 3)) :: S, wvn_sq
+    real, dimension(size(rho, 1), size(rho, 2), size(rho, 3)) :: num, den, kappa
+
+    integer :: i, j, n, q
+    real :: r_lo, r_hi, z_lo, z_hi
+
+    real :: action, max_kappa, omega_hat, volume
+    type(t_ray) :: ray
+
+    ! --------------------------------------------------------------------------
+
+    if (.not. break_waves) then
+        return
+    end if
+
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                if (rays(i, j, n)%meta == -1) then
+                    cycle
+                end if
+
+                ray = rays(i, j, n)
+                omega_hat = get_omega_hat(ray, coriolis(j))
+                action = ray%dens * ray%dk * ray%dl * ray%dm
+
+                S(i, j, n) = ray%m ** 2 * omega_hat * action
+                wvn_sq(i, j, n) = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
+            end do
+        end do
+    end do
+
+    num = 0.
+    den = 0.
+
+    call project(z_faces, S, rays, num)
+    call project(z_faces, S * wvn_sq, rays, den)
+    
+    num = num - rho * N0 ** 2 / 2
+    kappa = merge(num / den, 0., den /= 0.)
+
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                if (rays(i, j, n)%meta == -1) then
+                    cycle
+                end if
+
+                r_lo = rays(i, j, n)%r - 0.5 * rays(i, j, n)%dr
+                r_hi = rays(i, j, n)%r + 0.5 * rays(i, j, n)%dr
+                max_kappa = 0.
+
+                do q = 1, size(z_faces, 3) - 1
+                    z_lo = z_faces(i, j, q + 1)
+                    z_hi = z_faces(i, j, q)
+
+                    if (r_hi < z_lo) then
+                        cycle
+                    end if
+
+                    if (r_lo > z_hi) then
+                        exit
+                    end if
+
+                    if (kappa(i, j, q) > max_kappa) then
+                        max_kappa = kappa(i, j, q)
+                    end if
+                end do
+
+                rays(i, j, n)%dens = rays(i, j, n)%dens * max(0., &
+                    1 - wvn_sq(i, j, n) * max_kappa &
+                )
+
+            end do
+        end do
+    end do
+
+end subroutine apply_breaking
 
 subroutine apply_dissipation(z_full, rho, dt, rays)
 
