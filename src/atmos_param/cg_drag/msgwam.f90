@@ -10,7 +10,9 @@ use constants_mod,    only: constants_init, PI, RDGAS
 use diag_manager_mod, only: diag_manager_init, register_diag_field, send_data
 use fms_mod,          only: check_nml_error, close_file, error_mesg, FATAL, &
                             file_exist, fms_init, mpp_pe, mpp_root_pe, &
-                            open_namelist_file, stdlog, write_version_number
+                            open_namelist_file, stdlog, write_version_number, &
+                            CLOCK_ROUTINE, mpp_clock_id, MPP_CLOCK_SYNC, &
+                            mpp_clock_begin, mpp_clock_end
 use time_manager_mod, only: time_manager_init, time_type
 
 implicit none
@@ -79,7 +81,6 @@ end type t_tend
 
 interface operator (+)
     module procedure add_inc_inc
-    module procedure add_ray_inc
 end interface
 
 interface operator (*)
@@ -127,6 +128,7 @@ integer :: id_flux_x, id_flux_y, id_accel_x, id_accel_y
 real, parameter :: missing_value = -999.
 
 logical :: is_initialized = .false.
+integer, dimension(3) :: clocks
 
 contains
 
@@ -187,12 +189,13 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(drays_dt(i_max, j_max, n_max))
     allocate(increments(i_max, j_max, n_max))
     allocate(launches(i_max, j_max, n_source))
-
-    allocate(flux_x(i_max, j_max, q_max + 1))
-    allocate(flux_y(i_max, j_max, q_max + 1))
+    
     allocate(z_faces(i_max, j_max, q_max + 1))
     allocate(z_padded(i_max, j_max, q_max + 2))
     allocate(rho(i_max, j_max, q_max))
+
+    allocate(flux_x(i_max, j_max, q_max + 1))
+    allocate(flux_y(i_max, j_max, q_max + 1))
 
     rays(:, :, :)%meta = -1
     allocate(last_meta(i_max, j_max))
@@ -218,6 +221,9 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     call init_source
     call init_nc_output(axes, Time)
 
+    clocks(1) = mpp_clock_id("      MS-GWaM tendencies", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(2) = mpp_clock_id("      MS-GWaM projection", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+
 end subroutine cg_drag_init
 
 subroutine cg_drag_calc(i_start, j_start, lat, &
@@ -239,13 +245,12 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
     flux_x = 0.
     flux_y = 0.
 
-    call pad_grid(z_full, z_faces)
-    call pad_grid(z_faces, z_padded)
     call update_rho(p_full, temp, rho)
+    call update_grids(z_full, z_faces, z_padded)
 
     call take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
     call apply_dissipation(z_full, rho, dt, rays)
-    call apply_breaking(z_faces, rho, rays)
+    call apply_breaking(z_faces, z_padded, rho, rays)
 
     call check_boundaries(z_full, rays)
     call check_source(z_full, uuu, vvv, dt, rays)
@@ -341,22 +346,32 @@ elemental function add_inc_inc(a, b) result(out)
 
 end function add_inc_inc
 
-elemental function add_ray_inc(ray, inc) result(out)
+subroutine add_ray_inc(B, increments, rays)
 
     ! --------------------------------------------------------------------------
-    ! arguments and result
+    ! arguments
     ! --------------------------------------------------------------------------
-    type(t_ray), intent(in) :: ray
-    type(t_inc), intent(in) :: inc
-    type(t_ray)             :: out
+    real,                            intent(in)    :: B
+    type(t_inc), dimension(:, :, :), intent(in)    :: increments
+    type(t_ray), dimension(:, :, :), intent(inout) :: rays
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer i, j, n
 
     ! --------------------------------------------------------------------------
 
-    out = ray
-    out%r = ray%r + inc%r
-    out%m = ray%m + inc%m
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
+                rays(i, j, n)%r = rays(i, j, n)%r + B * increments(i, j, n)%r
+                rays(i, j, n)%m = rays(i, j, n)%m + B * increments(i, j, n)%m
+            end do
+        end do
+    end do
 
-end function add_ray_inc
+end subroutine add_ray_inc
 
 subroutine delete_at(i, j, n, rays)
 
@@ -816,12 +831,12 @@ end subroutine update_launches
 ! time stepping
 ! ==============================================================================
 
-subroutine apply_breaking(z_faces, rho, rays)
+subroutine apply_breaking(z_faces, z_padded, rho, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :),        intent(in)    :: z_faces, rho
+    real, dimension(:, :, :),        intent(in)    :: z_faces, z_padded, rho
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
@@ -834,8 +849,7 @@ subroutine apply_breaking(z_faces, rho, rays)
     real :: r_lo, r_hi, z_lo, z_hi
 
     real :: action, max_kappa, omega_hat, volume
-    type(t_ray) :: ray
-
+    
     ! --------------------------------------------------------------------------
 
     if (.not. break_waves) then
@@ -849,12 +863,15 @@ subroutine apply_breaking(z_faces, rho, rays)
                     cycle
                 end if
 
-                ray = rays(i, j, n)
-                omega_hat = get_omega_hat(ray, coriolis(j))
-                action = ray%dens * ray%dk * ray%dl * ray%dm
+                associate (ray => rays(i, j, n))
+                    ray = rays(i, j, n)
+                    omega_hat = get_omega_hat(ray, coriolis(j))
+                    action = ray%dens * ray%dk * ray%dl * ray%dm
 
-                S(i, j, n) = ray%m ** 2 * omega_hat * action
-                wvn_sq(i, j, n) = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
+                    S(i, j, n) = ray%m ** 2 * omega_hat * action
+                    wvn_sq(i, j, n) = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
+                end associate
+
             end do
         end do
     end do
@@ -862,11 +879,12 @@ subroutine apply_breaking(z_faces, rho, rays)
     num = 0.
     den = 0.
 
-    call project(z_faces, S, rays, num)
-    call project(z_faces, S * wvn_sq, rays, den)
+    call project(z_padded, S, rays, num)
+    call project(z_padded, S * wvn_sq, rays, den)
     
     num = num - rho * N0 ** 2 / 2
     kappa = merge(num / den, 0., den /= 0.)
+    kappa = 0.5 * (kappa(:, :, :q_max) + kappa(:, :, 1:))
 
     do n = 1, n_max
         do j = 1, j_max
@@ -989,7 +1007,6 @@ subroutine check_boundaries(z_full, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n
-    type(t_ray) :: ray
     logical :: delete
     real :: cg, flux, volume, wvn
 
@@ -1002,16 +1019,17 @@ subroutine check_boundaries(z_full, rays)
                     cycle
                 end if
 
-                ray = rays(i, j, n)
-                cg = get_cg_r(ray, coriolis(j))
+                associate (ray => rays(i, j, n))
+                    cg = get_cg_r(ray, coriolis(j))
 
-                volume = ray%dk * ray%dl * ray%dm
-                wvn = sqrt(ray%k ** 2 + ray%l ** 2)
-                flux = wvn * ray%dens * volume * cg
+                    volume = ray%dk * ray%dl * ray%dm
+                    wvn = sqrt(ray%k ** 2 + ray%l ** 2)
+                    flux = wvn * ray%dens * volume * cg
 
-                delete = ray%r - 0.5 * ray%dr > z_full(i, j, 1)
-                delete = delete .or. (abs(flux) < min_flux)
-                delete = delete .or. ray%age > max_age
+                    delete = ray%r - 0.5 * ray%dr > z_full(i, j, 1)
+                    delete = delete .or. (abs(flux) < min_flux)
+                    delete = delete .or. ray%age > max_age
+                end associate
 
                 if (delete) then
                     call delete_at(i, j, n, rays)
@@ -1045,7 +1063,7 @@ subroutine take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
     do stage = 1, 3
         call update_tendencies(z_full, uuu, vvv, rays, drays_dt)
         increments = As(stage) * increments + dt * drays_dt
-        rays = rays + Bs(stage) * increments
+        call add_ray_inc(Bs(stage), increments, rays)
     end do
 
     rays(:, :, :)%age = rays(:, :, :)%age + dt
@@ -1064,12 +1082,13 @@ subroutine update_tendencies(z_full, uuu, vvv, rays, drays_dt)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    type(t_ray) :: ray
     real :: du_dr, dv_dr
     real :: z_hi, z_lo, dz
     integer :: i, j, n, q
 
     ! --------------------------------------------------------------------------
+
+    call mpp_clock_begin(clocks(1))
 
     do n = 1, n_max
         do j = 1, j_max
@@ -1080,24 +1099,27 @@ subroutine update_tendencies(z_full, uuu, vvv, rays, drays_dt)
                     cycle
                 end if
 
-                ray = rays(i, j, n)
-                do q = 1, q_max - 1
-                    z_hi = z_full(i, j, q)
-                    z_lo = z_full(i, j, q + 1)
-                    dz = z_hi - z_lo
+                associate (ray => rays(i, j, n))
+                    do q = 1, q_max - 1
+                        z_hi = z_full(i, j, q)
+                        z_lo = z_full(i, j, q + 1)
+                        dz = z_hi - z_lo
 
-                    if ((z_lo < ray%r) .and. (ray%r < z_hi)) then
-                        du_dr = (uuu(i, j, q) - uuu(i, j, q + 1)) / dz
-                        dv_dr = (vvv(i, j, q) - vvv(i, j, q + 1)) / dz
-                        exit
-                    end if
-                end do
+                        if ((z_lo < ray%r) .and. (ray%r < z_hi)) then
+                            du_dr = (uuu(i, j, q) - uuu(i, j, q + 1)) / dz
+                            dv_dr = (vvv(i, j, q) - vvv(i, j, q + 1)) / dz
+                            exit
+                        end if
+                    end do
 
-                drays_dt(i, j, n)%r = get_cg_r(ray, coriolis(j))
-                drays_dt(i, j, n)%m = -(ray%k * du_dr + ray%l * dv_dr)
+                    drays_dt(i, j, n)%r = get_cg_r(ray, coriolis(j))
+                    drays_dt(i, j, n)%m = -(ray%k * du_dr + ray%l * dv_dr)
+                end associate
             end do
         end do
     end do
+
+    call mpp_clock_end(clocks(1))
 
 end subroutine update_tendencies
 
@@ -1160,12 +1182,12 @@ subroutine calc_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine calc_accelerations
 
-subroutine project(z_faces, values, rays, output)
+subroutine project(z_padded, values, rays, output)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :),        intent(in)  :: z_faces
+    real, dimension(:, :, 0:),       intent(in)  :: z_padded
     real, dimension(:, :, :),        intent(in)  :: values
     type(t_ray), dimension(:, :, :), intent(in)  :: rays
     real, dimension(:, :, :),        intent(out) :: output
@@ -1179,6 +1201,8 @@ subroutine project(z_faces, values, rays, output)
 
     ! --------------------------------------------------------------------------
 
+    call mpp_clock_begin(clocks(2))
+
     do j = 1, j_max
         do i = 1, i_max
             do n = 1, n_max
@@ -1190,8 +1214,8 @@ subroutine project(z_faces, values, rays, output)
                 r_hi = rays(i, j, n)%r + 0.5 * rays(i, j, n)%dr
 
                 do q = 1, q_max
-                    z_hi = z_faces(i, j, q)
-                    z_lo = z_faces(i, j, q + 1)
+                    z_hi = z_padded(i, j, q)
+                    z_lo = z_padded(i, j, q + 1)
                     dz = z_hi - z_lo
 
                     if (r_hi < z_lo) then
@@ -1208,6 +1232,8 @@ subroutine project(z_faces, values, rays, output)
             end do
         end do
     end do
+
+    call mpp_clock_end(clocks(2))
 
 end subroutine project
 
@@ -1289,35 +1315,25 @@ end subroutine update_fluxes
 ! mean state calculations
 ! ==============================================================================
 
-subroutine pad_grid(z_in, z_out)
+subroutine update_grids(z_full, z_faces, z_padded)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :), intent(in)  :: z_in
-    real, dimension(:, :, :), intent(out) :: z_out
-
-    ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    integer :: i, j, q, q_max
+    real, dimension(:, :, :),  intent(in)  :: z_full
+    real, dimension(:, :, :),  intent(out) :: z_faces
+    real, dimension(:, :, 0:), intent(out) :: z_padded
 
     ! --------------------------------------------------------------------------
 
-    q_max = size(z_in, 3)
+    z_padded(:, :, 1:q_max) = z_full(:, :, :)
+    z_padded(:, :, 0) = 2 * z_full(:, :, 1) - z_full(:, :, 2)
+    z_padded(:, :, q_max + 1) = 2 * z_full(:, :, q_max) - &
+        z_full(:, :, q_max - 1)
 
-    do q = 2, q_max
-        do j = 1, j_max
-            do i = 1, i_max
-                z_out(i, j, q) = 0.5 * (z_in(i, j, q - 1) + z_in(i, j, q))
-            end do
-        end do
-    end do
+    z_faces(:, :, :) = 0.5 * (z_padded(:, :, 1:) + z_padded(:, :, :q_max))
 
-    z_out(:, :, 1) = z_in(:, :, 1) + padding_z
-    z_out(:, :, q_max + 1) = z_in(:, :, q_max) - padding_z
-
-end subroutine pad_grid
+end subroutine update_grids
 
 subroutine update_rho(p_full, temp, rho)
 
