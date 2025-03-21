@@ -46,7 +46,6 @@ real :: min_flux = 1.e-8
 real :: mu = 1.e-3
 integer :: n_max = 2500
 integer :: n_source = 48
-real :: padding_z = 500.
 real :: source_pressure = 300.e+2
 real :: T_hat_source = 10. * 3600
 logical :: use_shapiro_filter = .true.
@@ -59,8 +58,7 @@ real :: N0 = 0.015
 namelist / cg_drag_nml / &
     boundary_flux, break_waves, dr_source, cp_center, cp_max, cp_width, & 
     dk_source, dl_source, epsilon, extrinsic, max_age, min_flux, mu, n_max, &
-    n_source, padding_z, source_pressure, T_hat_source, use_shapiro_filter, &
-    H_rho, N0
+    n_source, source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
 
 ! ==============================================================================
 ! module-level private variables
@@ -75,19 +73,6 @@ type :: t_ray
     integer :: age, meta
 end type t_ray
 
-type :: t_tend
-    real :: r, m
-end type t_tend
-
-interface operator (+)
-    module procedure add_inc_inc
-end interface
-
-interface operator (*)
-    module procedure mult_scalar_inc
-    module procedure mult_scalar_tend
-end interface
-
 interface get_cg_r
     module procedure cg_r_from_ray
     module procedure cg_r_from_reals
@@ -99,7 +84,6 @@ interface get_omega_hat
 end interface
 
 type(t_ray), dimension(:, :, :), allocatable :: rays
-type(t_tend), dimension(:, :, :), allocatable :: drays_dt
 type(t_inc), dimension(:, :, :), allocatable :: increments
 type(t_ray), dimension(:, :, :), allocatable :: launches
 
@@ -128,7 +112,7 @@ integer :: id_flux_x, id_flux_y, id_accel_x, id_accel_y
 real, parameter :: missing_value = -999.
 
 logical :: is_initialized = .false.
-integer, dimension(3) :: clocks
+integer, dimension(5) :: clocks
 
 contains
 
@@ -186,7 +170,6 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     q_max = size(p_ref(:)) - 1
 
     allocate(rays(i_max, j_max, n_max))
-    allocate(drays_dt(i_max, j_max, n_max))
     allocate(increments(i_max, j_max, n_max))
     allocate(launches(i_max, j_max, n_source))
     
@@ -221,8 +204,11 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     call init_source
     call init_nc_output(axes, Time)
 
-    clocks(1) = mpp_clock_id("      MS-GWaM tendencies", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
-    clocks(2) = mpp_clock_id("      MS-GWaM projection", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(1) = mpp_clock_id("      MS-GWaM RK3", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(2) = mpp_clock_id("      MS-GWaM sinks", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(3) = mpp_clock_id("      MS-GWaM boundaries", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(4) = mpp_clock_id("      MS-GWaM fluxes", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(5) = mpp_clock_id("      MS-GWaM drags", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
 
 end subroutine cg_drag_init
 
@@ -248,15 +234,27 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
     call update_rho(p_full, temp, rho)
     call update_grids(z_full, z_faces, z_padded)
 
-    call take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
+    call mpp_clock_begin(clocks(1))
+    call take_RK3_step(z_full, uuu, vvv, dt, rays)
+    call mpp_clock_end(clocks(1))
+
+    call mpp_clock_begin(clocks(2))
     call apply_dissipation(z_full, rho, dt, rays)
     call apply_breaking(z_faces, z_padded, rho, rays)
+    call mpp_clock_end(clocks(2))
 
+    call mpp_clock_begin(clocks(3))
     call check_boundaries(z_full, rays)
     call check_source(z_full, uuu, vvv, dt, rays)
+    call mpp_clock_end(clocks(3))
 
+    call mpp_clock_begin(clocks(4))
     call update_fluxes(z_padded, rays, flux_x, flux_y)
+    call mpp_clock_end(clocks(4))
+
+    call mpp_clock_begin(clocks(5))
     call calc_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
+    call mpp_clock_end(clocks(5))
     call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine cg_drag_calc
@@ -314,7 +312,7 @@ subroutine send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
     end if
 
     if (id_flux_y > 0) then
-        i_err = send_data(id_flux_x, flux_y(:, :, 2:), Time, i_start, j_start)
+        i_err = send_data(id_flux_y, flux_y(:, :, 2:), Time, i_start, j_start)
     end if
 
     if (id_accel_x > 0) then
@@ -322,56 +320,14 @@ subroutine send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
     end if
 
     if (id_accel_y > 0) then
-        i_err = send_data(id_accel_x, dv_dt, Time, i_start, j_start)
+        i_err = send_data(id_accel_y, dv_dt, Time, i_start, j_start)
     end if
 
 end subroutine send_nc_output
 
 ! ==============================================================================
-! type(t_ray) and type(t_tend) helpers
+! type(t_ray) helpers
 ! ==============================================================================
-
-elemental function add_inc_inc(a, b) result(out)
-
-    ! --------------------------------------------------------------------------
-    ! arguments and result
-    ! --------------------------------------------------------------------------
-    type(t_inc), intent(in) :: a, b
-    type(t_inc)             :: out
-
-    ! --------------------------------------------------------------------------
-
-    out%r = a%r + b%r
-    out%m = a%m + b%m
-
-end function add_inc_inc
-
-subroutine add_ray_inc(B, increments, rays)
-
-    ! --------------------------------------------------------------------------
-    ! arguments
-    ! --------------------------------------------------------------------------
-    real,                            intent(in)    :: B
-    type(t_inc), dimension(:, :, :), intent(in)    :: increments
-    type(t_ray), dimension(:, :, :), intent(inout) :: rays
-
-    ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    integer i, j, n
-
-    ! --------------------------------------------------------------------------
-
-    do n = 1, n_max
-        do j = 1, j_max
-            do i = 1, i_max
-                rays(i, j, n)%r = rays(i, j, n)%r + B * increments(i, j, n)%r
-                rays(i, j, n)%m = rays(i, j, n)%m + B * increments(i, j, n)%m
-            end do
-        end do
-    end do
-
-end subroutine add_ray_inc
 
 subroutine delete_at(i, j, n, rays)
 
@@ -399,38 +355,6 @@ subroutine delete_at(i, j, n, rays)
     rays(i, j, n)%meta = -1
 
 end subroutine delete_at
-
-elemental function mult_scalar_inc(c, inc) result(out)
-
-    ! --------------------------------------------------------------------------
-    ! arguments and result
-    ! --------------------------------------------------------------------------
-    real,        intent(in) :: c
-    type(t_inc), intent(in) :: inc
-    type(t_inc)             :: out
-
-    ! --------------------------------------------------------------------------
-
-    out%r = c * inc%r
-    out%m = c * inc%m
-
-end function mult_scalar_inc
-
-elemental function mult_scalar_tend(c, tend) result(inc)
-
-    ! --------------------------------------------------------------------------
-    ! arguments and result
-    ! --------------------------------------------------------------------------
-    real,         intent(in) :: c
-    type(t_tend), intent(in) :: tend
-    type(t_inc)              :: inc
-
-    ! --------------------------------------------------------------------------
-
-    inc%r = c * tend%r
-    inc%m = c * tend%m
-
-end function mult_scalar_tend
 
 ! ==============================================================================
 ! dispersion relation
@@ -1040,113 +964,67 @@ subroutine check_boundaries(z_full, rays)
 
 end subroutine check_boundaries
 
-subroutine take_RK3_step(z_full, uuu, vvv, dt, rays, drays_dt, increments)
+subroutine take_RK3_step(z_full, uuu, vvv, dt, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :),         intent(in)    :: z_full, uuu, vvv
-    real,                             intent(in)    :: dt
-    type(t_ray), dimension(:, :, :),  intent(inout) :: rays
-    type(t_tend), dimension(:, :, :), intent(out)   :: drays_dt
-    type(t_inc), dimension(:, :, :),  intent(out)   :: increments
+    real, dimension(:, :, :),        intent(in)    :: z_full, uuu, vvv
+    real,                            intent(in)    :: dt
+    type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: stage
+    integer i, j, n, q, stage
+    real :: dz, z_hi, z_lo
+    real :: du_dr, dv_dr
+    real :: dr_dt, dm_dt
 
     ! --------------------------------------------------------------------------
 
-    call zero_increments(increments)
-
     do stage = 1, 3
-        call update_tendencies(z_full, uuu, vvv, rays, drays_dt)
-        increments = As(stage) * increments + dt * drays_dt
-        call add_ray_inc(Bs(stage), increments, rays)
+
+        do n = 1, n_max
+            do j = 1, j_max
+                do i = 1, i_max
+
+                    if (rays(i, j, n)%meta == -1) then
+                        cycle
+                    end if
+
+                    associate (ray => rays(i, j, n), inc => increments(i, j, n))
+                        do q = 1, q_max - 1
+                            z_hi = z_full(i, j, q)
+                            z_lo = z_full(i, j, q + 1)
+                            dz = z_hi - z_lo
+                        
+                            if ((z_lo < ray%r) .and. (ray%r < z_hi)) then
+                                du_dr = (uuu(i, j, q) - uuu(i, j, q + 1)) / dz
+                                dv_dr = (vvv(i, j, q) - vvv(i, j, q + 1)) / dz
+                                exit
+                            end if
+                        end do
+
+                        dr_dt = get_cg_r(ray, coriolis(j))
+                        dm_dt = -(ray%k * du_dr + ray%l * dv_dr)
+                
+                        inc%r = As(stage) * inc%r + dt * dr_dt
+                        inc%m = As(stage) * inc%m + dt * dm_dt
+                
+                        ray%r = ray%r + Bs(stage) * inc%r
+                        ray%m = ray%m + Bs(stage) * inc%m
+                    end associate
+
+                end do
+            end do
+        end do
+
     end do
 
     rays(:, :, :)%age = rays(:, :, :)%age + dt
 
 end subroutine take_RK3_step
-
-subroutine update_tendencies(z_full, uuu, vvv, rays, drays_dt)
-
-    ! --------------------------------------------------------------------------
-    ! arguments
-    ! --------------------------------------------------------------------------
-    real, dimension(:, :, :),         intent(in)  :: z_full, uuu, vvv
-    type(t_ray), dimension(:, :, :),  intent(in)  :: rays
-    type(t_tend), dimension(:, :, :), intent(out) :: drays_dt
-
-    ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    real :: du_dr, dv_dr
-    real :: z_hi, z_lo, dz
-    integer :: i, j, n, q
-
-    ! --------------------------------------------------------------------------
-
-    call mpp_clock_begin(clocks(1))
-
-    do n = 1, n_max
-        do j = 1, j_max
-            do i = 1, i_max
-                if (rays(i, j, n)%meta == -1) then
-                    drays_dt(i, j, n)%r = 0
-                    drays_dt(i, j, n)%m = 0
-                    cycle
-                end if
-
-                associate (ray => rays(i, j, n))
-                    do q = 1, q_max - 1
-                        z_hi = z_full(i, j, q)
-                        z_lo = z_full(i, j, q + 1)
-                        dz = z_hi - z_lo
-
-                        if ((z_lo < ray%r) .and. (ray%r < z_hi)) then
-                            du_dr = (uuu(i, j, q) - uuu(i, j, q + 1)) / dz
-                            dv_dr = (vvv(i, j, q) - vvv(i, j, q + 1)) / dz
-                            exit
-                        end if
-                    end do
-
-                    drays_dt(i, j, n)%r = get_cg_r(ray, coriolis(j))
-                    drays_dt(i, j, n)%m = -(ray%k * du_dr + ray%l * dv_dr)
-                end associate
-            end do
-        end do
-    end do
-
-    call mpp_clock_end(clocks(1))
-
-end subroutine update_tendencies
-
-subroutine zero_increments(increments)
-
-    ! --------------------------------------------------------------------------
-    ! arguments
-    ! --------------------------------------------------------------------------
-    type(t_inc), dimension(:, :, :), intent(out) :: increments
-
-    ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    integer :: i, j, n
-
-    ! --------------------------------------------------------------------------
-
-    do n = 1, n_max
-        do j = 1, j_max
-            do i = 1, i_max
-                increments(i, j, n)%r = 0
-                increments(i, j, n)%m = 0
-            end do
-        end do
-    end do
-
-end subroutine zero_increments
 
 ! ==============================================================================
 ! flux calculations
@@ -1201,11 +1079,10 @@ subroutine project(z_padded, values, rays, output)
 
     ! --------------------------------------------------------------------------
 
-    call mpp_clock_begin(clocks(2))
+    do n = 1, n_max
+        do j = 1, j_max
+            do i = 1, i_max
 
-    do j = 1, j_max
-        do i = 1, i_max
-            do n = 1, n_max
                 if (rays(i, j, n)%meta == -1) then
                     cycle
                 end if
@@ -1232,8 +1109,6 @@ subroutine project(z_padded, values, rays, output)
             end do
         end do
     end do
-
-    call mpp_clock_end(clocks(2))
 
 end subroutine project
 
