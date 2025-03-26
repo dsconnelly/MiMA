@@ -33,12 +33,13 @@ public cg_drag_calc, cg_drag_end, cg_drag_init
 
 real :: boundary_flux = 0.01
 logical :: break_waves = .true.
-real :: cp_center = 15.
+real :: cp_center = 0.
 real :: cp_max = 50.
 real :: cp_width = 10.
 real :: dr_source = 1000.
 real :: epsilon = 1.
-logical :: extrinsic = .true.
+logical :: from_restart = .false.
+real :: lat_extrinsic = 15.
 integer :: max_age = 10 * 86400
 real :: min_flux = 1.e-8
 real :: mu = 1.e-3
@@ -55,8 +56,8 @@ real :: N0 = 0.015
 
 namelist / cg_drag_nml / &
     boundary_flux, break_waves, cp_center, cp_max, cp_width, dr_source, & 
-    epsilon, extrinsic, max_age, min_flux, mu, n_max, n_source, &
-    source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
+    epsilon, from_restart, lat_extrinsic, max_age, min_flux, mu, n_max, &
+    n_source, source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
 
 ! ==============================================================================
 ! derived type definitions
@@ -92,6 +93,7 @@ integer, dimension(5) :: clocks
 real :: hgamma_sq
 integer :: i_max, j_max, q_max, q_source
 real, dimension(:), allocatable :: coriolis_sq
+logical, dimension(:), allocatable :: extrinsic
 real, dimension(:, :, :), allocatable :: z_faces, u_bar, v_bar, rho
 real, dimension(:, :, :), allocatable :: z_padded
 
@@ -214,7 +216,7 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(source(n_source, i_max, j_max))
     allocate(last_meta(i_max, j_max))
 
-    rays(:, :, :)%meta = -1
+    call init_ray_state(rays)
     last_meta = 1
 
     do q = 1, q_max
@@ -225,10 +227,12 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     end do
 
     allocate(coriolis_sq(j_max))
+    allocate(extrinsic(j_max))
 
     do j = 1, j_max
         lat = 0.5 * (lat_bounds(j) + lat_bounds(j + 1))
         coriolis_sq(j) = (2 * PI * sin(lat) / 86400.) ** 2
+        extrinsic = abs(180 * lat / PI) > lat_extrinsic
     end do
 
     hgamma_sq = ((1. / 2. - 2. / 7.) / H_rho) ** 2
@@ -295,6 +299,7 @@ end subroutine cg_drag_calc
 
 subroutine cg_drag_end
 
+    call save_ray_state(rays)
     is_initialized = .false.
 
 end subroutine cg_drag_end
@@ -581,6 +586,37 @@ end subroutine update_mean_state
 ! ray volume state and sort helpers
 ! ==============================================================================
 
+subroutine init_ray_state(rays)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    type(t_ray), dimension(:, :, :), intent(out) :: rays
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: iostat, unit
+
+    ! --------------------------------------------------------------------------
+
+    if (.not. from_restart) then
+        rays(:, :, :)%meta = -1
+        return
+    end if
+
+    open(unit, file="INPUT/rays.dat", form="unformatted", &
+        iostat=iostat, action="read")
+
+    if (iostat /= 0) then
+        call error_mesg("cg_drag_mod", "error loading ray state", FATAL)
+    end if
+
+    read(unit) rays
+    close(unit)
+
+end subroutine init_ray_state
+
 pure subroutine delete_ray(n, i, j, rays)
 
     ! --------------------------------------------------------------------------
@@ -611,6 +647,32 @@ pure subroutine delete_ray(n, i, j, rays)
     end associate
 
 end subroutine delete_ray
+
+subroutine save_ray_state(rays)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    type(t_ray), dimension(:, :, :) , intent(in) :: rays
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: iostat, unit
+
+    ! --------------------------------------------------------------------------
+
+    open(unit, file="RESTART/rays.dat", form="unformatted", &
+        iostat=iostat, action="write")
+
+    if (iostat /= 0) then
+        call error_mesg("cg_drag_mod", "error saving ray state", FATAL)
+    end if
+
+    write(unit) rays
+    close(unit)
+
+end subroutine save_ray_state
 
 pure function locate(r, z, q_guess) result(q)
 
@@ -870,7 +932,7 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
                 do n = 1, n_per_dir
 
                     cp = cp_source(n)
-                    if (extrinsic) then
+                    if (extrinsic(j)) then
                         u = u_bar(q_source, i, j)
                         v = v_bar(q_source, i, j)
                         cp = cp - cos_phi(dir) * u - sin_phi(dir) * v
