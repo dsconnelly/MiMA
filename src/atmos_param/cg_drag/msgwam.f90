@@ -44,7 +44,6 @@ real :: min_flux = 1.e-8
 real :: mu = 1.e-3
 integer :: n_max = 2500
 integer :: n_source = 48
-logical :: sort_rays = .true.
 real :: source_pressure = 300.e+2
 real :: T_hat_source = 10. * 3600
 logical :: use_shapiro_filter = .true.
@@ -56,7 +55,7 @@ real :: N0 = 0.015
 
 namelist / cg_drag_nml / &
     boundary_flux, break_waves, cp_center, cp_max, cp_width, dr_source, & 
-    epsilon, extrinsic, max_age, min_flux, mu, n_max, n_source, sort_rays, &
+    epsilon, extrinsic, max_age, min_flux, mu, n_max, n_source, &
     source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
 
 ! ==============================================================================
@@ -69,7 +68,7 @@ namelist / cg_drag_nml / &
 
 type :: t_ray
     real :: r, dr, k, l, m, dm, dens
-    integer :: age, meta
+    integer :: age, meta, q_lo, q_mid, q_hi
 end type t_ray
 
 ! The t_inc type is used for increments to the ray volume properties that are
@@ -92,7 +91,7 @@ integer, dimension(5) :: clocks
 
 real :: hgamma_sq
 integer :: i_max, j_max, q_max, q_source
-real, dimension(:), allocatable :: coriolis
+real, dimension(:), allocatable :: coriolis_sq
 real, dimension(:, :, :), allocatable :: z_faces, u_bar, v_bar, rho
 real, dimension(:, :, :), allocatable :: z_padded
 
@@ -103,7 +102,6 @@ real, dimension(:, :, :), allocatable :: z_padded
 type(t_ray), dimension(:, :, :), allocatable :: rays
 type(t_inc), dimension(:, :, :), allocatable :: increments
 real, dimension(:, :, :), allocatable :: flux_x, flux_y
-integer, dimension(:, :, :), allocatable :: sort_idx
 
 ! ==============================================================================
 ! ray volume source variables
@@ -219,16 +217,6 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     rays(:, :, :)%meta = -1
     last_meta = 1
 
-    allocate(sort_idx(n_max, i_max, j_max))
-
-    do j = 1, j_max
-        do i = 1, i_max
-            do n = 1, n_max
-                sort_idx(n, i, j) = n
-            end do
-        end do
-    end do
-
     do q = 1, q_max
         if (p_ref(q) > source_pressure) then
             q_source = q
@@ -236,11 +224,11 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
         end if
     end do
 
-    allocate(coriolis(j_max))
+    allocate(coriolis_sq(j_max))
 
     do j = 1, j_max
         lat = 0.5 * (lat_bounds(j) + lat_bounds(j + 1))
-        coriolis(j) = 2 * PI * sin(lat) / 86400.
+        coriolis_sq(j) = (2 * PI * sin(lat) / 86400.) ** 2
     end do
 
     hgamma_sq = ((1. / 2. - 2. / 7.) / H_rho) ** 2
@@ -248,11 +236,11 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     call init_source
     call init_nc_output(axes, Time)
 
-    clocks(1) = mpp_clock_id("      MS-GWaM total", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
-    ! clocks(2) = mpp_clock_id("      MS-GWaM du_dr find", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
-    ! clocks(3) = mpp_clock_id("      MS-GWaM sinks", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
-    ! clocks(4) = mpp_clock_id("      MS-GWaM source", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
-    ! clocks(5) = mpp_clock_id("      MS-GWaM fluxes", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(1) = mpp_clock_id("      MS-GWaM mean state", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(2) = mpp_clock_id("      MS-GWaM RK3", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(3) = mpp_clock_id("      MS-GWaM sinks", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(4) = mpp_clock_id("      MS-GWaM source", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
+    clocks(5) = mpp_clock_id("      MS-GWaM fluxes", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
 
 end subroutine cg_drag_init
 
@@ -277,34 +265,31 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
     call update_mean_state(z_full, p_full, temp, uuu, vvv, &
         z_padded, z_faces, u_bar, v_bar, rho)
 
-    ! call mpp_clock_end(clocks(1))
-    ! call mpp_clock_begin(clocks(2))
+    call mpp_clock_end(clocks(1))
+    call mpp_clock_begin(clocks(2))
 
-    call take_RK3_step(z_padded, u_bar, v_bar, dt / 2., &
-        rays, sort_idx, increments)
+    call take_RK3_step(z_padded, u_bar, v_bar, dt / 2., rays, increments)
 
-    ! call mpp_clock_end(clocks(2))
-    ! call mpp_clock_begin(clocks(3))
+    call mpp_clock_end(clocks(2))
+    call mpp_clock_begin(clocks(3))
 
-    call apply_dissipation(z_padded, rho, dt / 2., sort_idx, rays)
-    call apply_breaking(z_faces, rho, sort_idx, rays)
+    call apply_dissipation(z_padded, rho, dt / 2., rays)
+    call apply_breaking(z_faces, rho, rays)
 
-    ! call mpp_clock_end(clocks(3))
-    ! call mpp_clock_begin(clocks(4))
+    call mpp_clock_end(clocks(3))
+    call mpp_clock_begin(clocks(4))
 
     call check_boundaries(z_padded, rays)
-    call check_source(z_padded, u_bar, v_bar, dt / 2., &
-        rays, sort_idx, last_meta, source)
+    call check_source(z_padded, u_bar, v_bar, dt / 2., rays, last_meta, source)
 
-    ! call mpp_clock_end(clocks(4))
-    ! call mpp_clock_begin(clocks(5))
+    call mpp_clock_end(clocks(4))
+    call mpp_clock_begin(clocks(5))
 
-    call update_fluxes(z_padded, rays, sort_idx, flux_x, flux_y)
+    call update_fluxes(z_padded, rays, flux_x, flux_y)
     call get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
     call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
 
-    ! call mpp_clock_end(clocks(5))
-    call mpp_clock_end(clocks(1))
+    call mpp_clock_end(clocks(5))
 
 end subroutine cg_drag_calc
 
@@ -318,27 +303,27 @@ end subroutine cg_drag_end
 ! dispersion relation subroutines
 ! ==============================================================================
 
-pure function cg_r_from_ray(ray, f) result(cg_r)
+pure function cg_r_from_ray(ray, f2) result(cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
     type(t_ray), intent(in) :: ray
-    real,        intent(in) :: f
+    real,        intent(in) :: f2
     real                    :: cg_r
 
     ! --------------------------------------------------------------------------
 
-    cg_r = cg_r_from_reals(ray%k, ray%l, ray%m, f)
+    cg_r = cg_r_from_reals(ray%k, ray%l, ray%m, f2)
 
 end function cg_r_from_ray
 
-pure function cg_r_from_reals(k, l, m, f) result(cg_r)
+pure function cg_r_from_reals(k, l, m, f2) result(cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, m, f
+    real, intent(in) :: k, l, m, f2
     real             :: cg_r
 
     ! --------------------------------------------------------------------------
@@ -349,9 +334,9 @@ pure function cg_r_from_reals(k, l, m, f) result(cg_r)
     ! --------------------------------------------------------------------------
 
     wvn_sq = k ** 2 + l ** 2 + m ** 2 + hgamma_sq
-    omega_hat = get_omega_hat(k, l, m, f)
+    omega_hat = get_omega_hat(k, l, m, f2)
 
-    cg_r = -m * (omega_hat ** 2 - f ** 2) / (omega_hat * wvn_sq)
+    cg_r = -m * (omega_hat ** 2 - f2) / (omega_hat * wvn_sq)
 
 end function cg_r_from_reals
 
@@ -369,12 +354,12 @@ pure function get_dm(m) result(dm)
 
 end function get_dm
 
-pure function get_m(k, l, f) result(m)
+pure function get_m(k, l, f2) result(m)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, f
+    real, intent(in) :: k, l, f2
     real             :: m
 
     ! --------------------------------------------------------------------------
@@ -387,48 +372,47 @@ pure function get_m(k, l, f) result(m)
     omega_hat_sq = omega_hat_source ** 2
     m = -sqrt(&
         (k ** 2 + l ** 2) * (N0 ** 2 - omega_hat_sq) / &
-        (omega_hat_sq - f ** 2) &
+        (omega_hat_sq - f2) &
     )
 
 end function get_m
 
-pure function omega_hat_from_ray(ray, f) result(omega_hat)
+pure function omega_hat_from_ray(ray, f2) result(omega_hat)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
     type(t_ray), intent(in) :: ray
-    real,        intent(in) :: f
+    real,        intent(in) :: f2
     real                    :: omega_hat
 
     ! --------------------------------------------------------------------------
 
-    omega_hat = omega_hat_from_reals(ray%k, ray%l, ray%m, f)
+    omega_hat = omega_hat_from_reals(ray%k, ray%l, ray%m, f2)
 
 end function omega_hat_from_ray
 
-pure function omega_hat_from_reals(k, l, m, f) result(omega_hat)
+pure function omega_hat_from_reals(k, l, m, f2) result(omega_hat)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, m, f
+    real, intent(in) :: k, l, m, f2
     real             :: omega_hat
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    real :: k2, l2, m2
+    real :: wvn_hor_sq, m2
 
     ! --------------------------------------------------------------------------
 
-    k2 = k ** 2
-    l2 = l ** 2
+    wvn_hor_sq = k ** 2 + l ** 2
     m2 = m ** 2 + hgamma_sq
 
     omega_hat = sqrt( &
-        (N0 ** 2 * (k2 + l2) + f ** 2 * m2) / &
-        (k2 + l2 + m2) &
+        (N0 ** 2 * wvn_hor_sq + f2 * m2) / &
+        (wvn_hor_sq + m2) &
     )
 
 end function omega_hat_from_reals
@@ -498,20 +482,19 @@ pure subroutine get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine
 
-pure subroutine update_fluxes(z_padded, rays, sort_idx, flux_x, flux_y)
+pure subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:, :, :),       intent(in)  :: z_padded
     type(t_ray), dimension(:, :, :), intent(in)  :: rays
-    integer, dimension(:, :, :),     intent(in)  :: sort_idx
     real, dimension(:, :, :),        intent(out) :: flux_x, flux_y
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, j, n, q, q_start, s
+    integer :: i, j, n, q
     real :: cg, dz, frac, f_x, f_y, r_hi, r_lo, z_hi, z_lo
 
     ! --------------------------------------------------------------------------
@@ -521,44 +504,31 @@ pure subroutine update_fluxes(z_padded, rays, sort_idx, flux_x, flux_y)
 
     do j = 1, j_max
         do i = 1, i_max
-            q_start = 0
-
             do n = 1, n_max
-                s = sort_idx(n, i, j)
-                if (rays(s, i, j)%meta == -1) then
+
+                if (rays(n, i, j)%meta == -1) then
                     cycle
                 end if
 
-                associate (ray => rays(s, i, j))
-                    q_start = update_q_start( &
-                        z_padded(:, i, j), q_start + 1, ray &
-                    ) - 1
-
+                associate (ray => rays(n, i, j))
                     r_lo = ray%r - ray%dr / 2.
                     r_hi = ray%r + ray%dr / 2.
 
-                    cg = get_cg_r(ray, coriolis(j))
+                    cg = get_cg_r(ray, coriolis_sq(j))
                     f_x = ray%k * ray%dens * ray%dm * cg
                     f_y = ray%l * ray%dens * ray%dm * cg
+
+                    do q = ray%q_hi, ray%q_lo
+                        z_hi = z_padded(q, i, j)
+                        z_lo = z_padded(q + 1, i, j)
+                        dz = z_hi - z_lo
+                    
+                        frac = (min(r_hi, z_hi) - max(r_lo, z_lo)) / dz
+                        flux_x(q, i, j) = flux_x(q, i, j) + frac * f_x
+                        flux_y(q, i, j) = flux_y(q, i, j) + frac * f_y
+                    end do
+
                 end associate
-
-                do q = q_start, q_max
-                    z_hi = z_faces(q, i, j)
-                    z_lo = z_faces(q + 1, i, j)
-                    dz = z_hi - z_lo
-
-                    if (r_hi < z_lo) then
-                        cycle
-                    end if
-
-                    if (r_lo > z_hi) then
-                        exit
-                    end if
-                
-                    frac = (min(r_hi, z_hi) - max(r_lo, z_lo)) / dz
-                    flux_x(q, i, j) = flux_x(q, i, j) + frac * f_x
-                    flux_y(q, i, j) = flux_y(q, i, j) + frac * f_y
-                end do
 
             end do
         end do
@@ -634,89 +604,60 @@ pure subroutine delete_ray(n, i, j, rays)
 
         ray%age = 0
         ray%meta = -1
+
+        ray%q_lo = -1
+        ray%q_mid = -1
+        ray%q_hi = -1
     end associate
 
 end subroutine delete_ray
 
-pure function update_q_start(z, q_old, ray) result(q_new)
+pure function locate(r, z, q_guess) result(q)
 
     ! --------------------------------------------------------------------------
-    ! arguments
+    ! arguments and result
     ! --------------------------------------------------------------------------
+    real,               intent(in) :: r
     real, dimension(:), intent(in) :: z
-    integer,            intent(in) :: q_old
-    type(t_ray),        intent(in) :: ray
-    integer                        :: q_new
+    integer,            intent(in) :: q_guess
+    integer                        :: q
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    real :: r_hi
+    integer :: q_max
 
     ! --------------------------------------------------------------------------
 
-    if (.not. sort_rays) then
-        q_new = q_old
+    q_max = size(z)
+    if (r > z(1)) then
+        q = 1
         return
     end if
 
-    r_hi = ray%r + ray%dr / 2.
-
-    q_new = q_old
-    do while (z(q_new + 1) > r_hi)
-        q_new = q_new + 1
-    end do
-
-end function update_q_start
-
-subroutine update_sort(rays, idx)
-
-    ! --------------------------------------------------------------------------
-    ! arguments
-    ! --------------------------------------------------------------------------
-    type(t_ray), dimension(:, :, :), intent(in)    :: rays
-    integer, dimension(:, :, :),     intent(inout) :: idx
-
-    ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    real :: key
-    integer :: curr, i, j, p, q
-    real, dimension(size(rays, 1)) :: sort_by
-
-    ! --------------------------------------------------------------------------
-
-    if (.not. sort_rays) then
+    if (r < z(q_max)) then
+        q = q_max - 1
         return
     end if
-
-    do j = 1, j_max
-        do i = 1, i_max
-            sort_by = -(rays(:, i, j)%r + rays(:, i, j)%dr / 2.)
-
-            do p = 2, n_max
-                curr = idx(p, i, j)
-                key = sort_by(curr)
-
-                q = p - 1
-                do while (q .ge. 1 .and. sort_by(idx(q, i, j)) > key)
-                    idx(q + 1, i, j) = idx(q, i, j)
-                    q = q - 1
-                end do
-
-                idx(q + 1, i, j) = curr
-            end do
-        end do
+    
+    q = q_guess
+    do while (.true.)
+        if (z(q) < r) then
+            q = q - 1
+        else if (z(q + 1) .ge. r) then
+            q = q + 1
+        else
+            exit
+        end if
     end do
 
-end subroutine update_sort
+end function locate
 
 ! ==============================================================================
 ! ray volume source subroutines
 ! ==============================================================================
 
-subroutine check_source(z_padded, u_bar, v_bar, dt, &
-    rays, sort_idx, last_meta, source)
+subroutine check_source(z_padded, u_bar, v_bar, dt, rays, last_meta, source)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -725,7 +666,6 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, &
     real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar
     real,                            intent(in)    :: dt
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
-    integer, dimension(:, :, :),     intent(inout) :: sort_idx
     integer, dimension(:, :),        intent(inout) :: last_meta
     type(t_ray), dimension(:, :, :), intent(out)   :: source
 
@@ -777,8 +717,6 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, &
             end do
         end do
     end do
-
-    call update_sort(rays, sort_idx)
 
 end subroutine check_source
 
@@ -838,7 +776,7 @@ pure subroutine find_lowest_energies(n_find, rays, idx)
                 end if
 
                 associate (ray => rays(n, i, j))
-                    omega_hat = get_omega_hat(ray, coriolis(j))
+                    omega_hat = get_omega_hat(ray, coriolis_sq(j))
                     energy = ray%dens * ray%dm * omega_hat
                 end associate
 
@@ -913,8 +851,8 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: dir, i, j, n, s
-    real :: cg, cp, k, l, m, prob, u, v, wvn_hor, z_source
+    integer :: dir, i, j, n, s, q_hi, q_mid, q_lo
+    real :: cg, cp, k, l, m, prob, r, u, v, wvn_hor
     real, dimension(size(source, 1), size(source, 2), size(source, 3)) :: rand
 
     ! --------------------------------------------------------------------------
@@ -923,6 +861,11 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
 
     do j = 1, j_max
         do i = 1, i_max
+            r = z_padded(q_source, i, j) - dr_source / 2.
+            q_hi = locate(r + dr_source / 2., z_padded(1:, i, j), q_source)
+            q_lo = locate(r - dr_source / 2., z_padded(1:, i, j), q_source)
+            q_mid = locate(r, z_padded(1:, i, j), q_source)
+
             do dir = 1, 4
                 do n = 1, n_per_dir
 
@@ -937,14 +880,13 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
                     k = wvn_hor * cos_phi(dir)
                     l = wvn_hor * sin_phi(dir)
 
-                    m = get_m(k, l, coriolis(j))
-                    cg = get_cg_r(k, l, m, coriolis(j))
+                    m = get_m(k, l, coriolis_sq(j))
+                    cg = get_cg_r(k, l, m, coriolis_sq(j))
                     prob = epsilon * cg * dt / dr_source
                     s = (dir - 1) * n_per_dir + n
 
                     if (rand(s, i, j) < prob) then
-                        z_source = z_padded(q_source, i, j)
-                        source(s, i, j)%r = z_source - dr_source / 2.
+                        source(s, i, j)%r = r
                         source(s, i, j)%dr = dr_source
 
                         source(s, i, j)%k = k
@@ -961,6 +903,10 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
                         last_meta(i, j) = last_meta(i, j) + 1
                         n_added(i, j) = n_added(i, j) + 1
 
+                        source(s, i, j)%q_mid = q_mid
+                        source(s, i, j)%q_hi = q_hi
+                        source(s, i, j)%q_lo = q_lo
+
                     else
                         source(s, i, j)%meta = -1
                     end if
@@ -975,20 +921,19 @@ end subroutine update_source
 ! ray volume sink subroutines
 ! ==============================================================================
 
-pure subroutine apply_breaking(z_faces, rho, sort_idx, rays)
+pure subroutine apply_breaking(z_faces, rho, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(:, :, :),        intent(in)    :: z_faces, rho
-    integer, dimension(:, :, :),     intent(in)    :: sort_idx
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, j, n, q, q_start, s
-    real :: crit, dz, frac, max_kappa, omega_hat, r_hi, r_lo, z_hi, z_lo
+    integer :: i, j, n, q
+    real :: dz, frac, max_kappa, omega_hat, r_hi, r_lo, S, z_hi, z_lo
     real, dimension(size(rays, 1), size(rays, 2), size(rays, 3)) :: wvn_sq
     real, dimension(size(rho, 1), size(rho, 2), size(rho, 3)) :: num, den, kappa
 
@@ -1003,43 +948,38 @@ pure subroutine apply_breaking(z_faces, rho, sort_idx, rays)
 
     do j = 1, j_max
         do i = 1, i_max
-
-            q_start = 1
-
             do n = 1, n_max
-                s = sort_idx(n, i, j)
-                if (rays(s, i, j)%meta == -1) then
+
+                if (rays(n, i, j)%meta == -1) then
                     cycle
                 end if
 
-                associate (ray => rays(s, i, j))
-                    omega_hat = get_omega_hat(ray, coriolis(j))
+                associate (ray => rays(n, i, j))
+                    omega_hat = get_omega_hat(ray, coriolis_sq(j))
                     wvn_sq(n, i, j) = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
-                    crit = ray%m ** 2 * omega_hat * ray%dens * ray%dm
+                    S = ray%m ** 2 * omega_hat * ray%dens * ray%dm
 
                     r_lo = ray%r - ray%dr / 2.
-                    r_hi = ray%r + ray%dr / 2.            
+                    r_hi = ray%r + ray%dr / 2.
+
+                    do q = max(1, ray%q_hi - 1), min(q_max, ray%q_lo + 1)
+                        z_hi = z_faces(q, i, j)
+                        z_lo = z_faces(q + 1, i, j)
+                        dz = z_hi - z_lo
+
+                        if (r_hi < z_lo) then
+                            cycle
+                        end if
+
+                        if (r_lo > z_hi) then
+                            exit
+                        end if
                     
-                    q_start = update_q_start(z_faces(:, i, j), q_start, ray)
+                        frac = (min(r_hi, z_hi) - max(r_lo, z_lo)) / dz
+                        num(q, i, j) = num(q, i, j) + frac * S
+                        den(q, i, j) = den(q, i, j) + frac * S * wvn_sq(n, i, j)
+                    end do
                 end associate
-
-                do q = q_start, q_max
-                    z_hi = z_faces(q, i, j)
-                    z_lo = z_faces(q + 1, i, j)
-                    dz = z_hi - z_lo
-
-                    if (r_hi < z_lo) then
-                        cycle
-                    end if
-
-                    if (r_lo > z_hi) then
-                        exit
-                    end if
-                
-                    frac = (min(r_hi, z_hi) - max(r_lo, z_lo)) / dz
-                    num(q, i, j) = num(q, i, j) + frac * crit
-                    den(q, i, j) = den(q, i, j) + frac * crit * wvn_sq(n, i, j)
-                end do
 
             end do
         end do
@@ -1049,22 +989,18 @@ pure subroutine apply_breaking(z_faces, rho, sort_idx, rays)
 
     do j = 1, j_max
         do i = 1, i_max
-            q_start = 1
-
             do n = 1, n_max
-                s = sort_idx(n, i, j)
-                if (rays(s, i, j)%meta == -1) then
+
+                if (rays(n, i, j)%meta == -1) then
                     cycle
                 end if
 
-                associate(ray => rays(s, i, j))
+                associate(ray => rays(n, i, j))
                     r_lo = ray%r - ray%dr / 2.
                     r_hi = ray%r + ray%dr / 2.
-
-                    q_start = update_q_start(z_faces(:, i, j), q_start, ray)
                 
                     max_kappa = 0.
-                    do q = q_start, q_max
+                    do q = max(1, ray%q_hi - 1), min(q_max, ray%q_lo + 1)
                         z_hi = z_faces(q, i, j)
                         z_lo = z_faces(q + 1, i, j)
 
@@ -1084,7 +1020,6 @@ pure subroutine apply_breaking(z_faces, rho, sort_idx, rays)
                     ray%dens = ray%dens * max(0., &
                         1 - wvn_sq(n, i, j) * max_kappa &
                     )
-
                 end associate
 
             end do
@@ -1093,7 +1028,7 @@ pure subroutine apply_breaking(z_faces, rho, sort_idx, rays)
 
 end subroutine apply_breaking
 
-pure subroutine apply_dissipation(z_padded, rho, dt, sort_idx, rays)
+pure subroutine apply_dissipation(z_padded, rho, dt, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -1101,13 +1036,12 @@ pure subroutine apply_dissipation(z_padded, rho, dt, sort_idx, rays)
     real, dimension(0:, :, :),       intent(in)    :: z_padded
     real, dimension(:, :, :),        intent(in)    :: rho
     real,                            intent(in)    :: dt
-    integer, dimension(:, :, :),     intent(in)    :: sort_idx
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, j, n, q, q_start, s
+    integer :: i, j, n
     real :: damping, omega_hat, nu, nu_hi, nu_lo, r, wvn_sq, z_hi, z_lo
 
     ! --------------------------------------------------------------------------
@@ -1118,54 +1052,34 @@ pure subroutine apply_dissipation(z_padded, rho, dt, sort_idx, rays)
 
     do j = 1, j_max
         do i = 1, i_max
-            q_start = 1
-
             do n = 1, n_max
 
-                s = sort_idx(n, i, j)
-                if (rays(s, i, j)%meta == -1) then
+                if (rays(n, i, j)%meta == -1) then
                     cycle
                 end if
 
-                nu = 0.
-                r = rays(s, i, j)%r
-                q_start = update_q_start( &
-                    z_padded(1:, i, j), q_start, rays(s, i, j) &
-                )
+                associate (ray => rays(n, i, j))
+                    z_hi = z_padded(ray%q_mid, i, j)
+                    z_lo = z_padded(ray%q_mid + 1, i, j)
 
-                do q = q_start, q_max - 1
-                    z_hi = z_padded(q, i, j)
-                    z_lo = z_padded(q + 1, i, j)
+                    nu_hi = mu / rho(ray%q_mid, i, j)
+                    nu_lo = mu / rho(ray%q_mid + 1, i, j)
 
-                    if ((z_lo .le. r) .and. (r < z_hi)) then
-                        nu_hi = mu / rho(q, i, j)
-                        nu_lo = mu / rho(q + 1, i, j)
+                    nu = ( &
+                        (nu_lo * (z_hi - r) + nu_hi * (r - z_lo)) / &
+                        (z_hi - z_lo) &
+                    )
 
-                        nu = ( &
-                            (nu_lo * (z_hi - r) + nu_hi * (r - z_lo)) / &
-                            (z_hi - z_lo) &
-                        )
+                    wvn_sq = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
+                    omega_hat = get_omega_hat(ray, coriolis_sq(j))
 
-                        exit
-                    end if
-                end do
+                    damping = nu * wvn_sq * ( &
+                        1 + coriolis_sq(j) / omega_hat ** 2 &
+                    )
 
-                if (nu == 0.) then
-                    cycle
-                end if
+                    ray%dens = ray%dens * exp(-dt * damping)
+                end associate
 
-                wvn_sq = ( &
-                    rays(s, i, j)%k ** 2 + &
-                    rays(s, i, j)%l ** 2 + &
-                    rays(s, i, j)%m ** 2 &
-                )
-
-                omega_hat = get_omega_hat(rays(s, i, j), coriolis(j))
-                damping = nu * wvn_sq * ( &
-                    1 + coriolis(j) ** 2 / omega_hat ** 2 &
-                )
-
-                rays(s, i, j)%dens = rays(s, i, j)%dens * exp(-dt * damping)
             end do
         end do
     end do
@@ -1197,7 +1111,7 @@ pure subroutine check_boundaries(z_padded, rays)
                 end if
 
                 associate (ray => rays(n, i, j))
-                    cg = get_cg_r(ray, coriolis(j))
+                    cg = get_cg_r(ray, coriolis_sq(j))
                     wvn = sqrt(ray%k ** 2 + ray%l ** 2)
                     flux = wvn * ray%dens * ray%dm * cg
 
@@ -1220,8 +1134,7 @@ end subroutine check_boundaries
 ! time stepping subroutines
 ! ==============================================================================
 
-subroutine take_RK3_step(z_padded, u_bar, v_bar, dt, &
-    rays, sort_idx, increments)
+pure subroutine take_RK3_step(z_padded, u_bar, v_bar, dt, rays, increments)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -1230,14 +1143,13 @@ subroutine take_RK3_step(z_padded, u_bar, v_bar, dt, &
     real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar
     real,                            intent(in)    :: dt
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
-    integer, dimension(:, :, :),     intent(inout) :: sort_idx
     type(t_inc), dimension(:, :, :), intent(out)   :: increments
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer i, j, n, q, q_start, s, stage
-    real :: dm_dt, dr_dt, dz, r_hi, z_hi, z_lo
+    integer i, j, n, q, stage
+    real :: dm_dt, dr_dt, dz, z_hi, z_lo
     real, dimension(size(u_bar, 1) - 1, size(u_bar, 2), size(u_bar, 3)) :: &
         du_dr, dv_dr
 
@@ -1257,47 +1169,41 @@ subroutine take_RK3_step(z_padded, u_bar, v_bar, dt, &
 
         do j = 1, j_max
             do i = 1, i_max
-                q_start = 1
-
                 do n = 1, n_max
-                    s = sort_idx(n, i, j)
-                    if (rays(s, i, j)%meta == -1) then
+
+                    if (rays(n, i, j)%meta == -1) then
                         cycle
                     end if
 
-                    associate(ray => rays(s, i, j), inc => increments(s, i, j))
-                        q_start = update_q_start( &
-                            z_padded(1:, i, j), q_start, ray &
+                    associate( &
+                        ray => rays(n, i, j), &
+                        inc => increments(n, i, j), &
+                        z => z_padded(1:, i, j) &
+                    )
+
+                        dr_dt = get_cg_r(ray, coriolis_sq(j))
+                        dm_dt = -( &
+                            du_dr(ray%q_mid, i, j) * ray%k + &
+                            dv_dr(ray%q_mid, i, j) * ray%l &
                         )
-
-                        dr_dt = get_cg_r(ray, coriolis(j))
-                        dm_dt = 0.
-
-                        do q = q_start, q_max - 1
-                            z_hi = z_padded(q, i, j)
-                            z_lo = z_padded(q + 1, i, j)
-                            
-                            if ((z_lo .le. ray%r) .and. (ray%r < z_hi)) then
-                                dm_dt = -( &
-                                    du_dr(q, i, j) * ray%k + &
-                                    dv_dr(q, i, j) * ray%l &
-                                )
-                                exit
-                            end if
-                        end do
 
                         inc%r = As(stage) * inc%r + dt * dr_dt
                         inc%m = As(stage) * inc%m + dt * dm_dt
 
                         ray%r = ray%r + Bs(stage) * inc%r
-                        ray%m = ray%m + Bs(stage) * inc%m                        
+                        ray%m = ray%m + Bs(stage) * inc%m
+                        ray%q_mid = locate(ray%r, z, ray%q_mid)
+
+                        if (stage == 3) then
+                            ray%q_hi = locate(ray%r + ray%dr / 2., z, ray%q_hi)
+                            ray%q_lo = locate(ray%r - ray%dr / 2., z, ray%q_lo)
+                        end if
+
                     end associate
 
                 end do
             end do
         end do
-
-        call update_sort(rays, sort_idx)
 
     end do
 
