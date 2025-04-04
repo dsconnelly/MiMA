@@ -1,9 +1,8 @@
-module cg_drag_mod
+module msgwam_mod
 
 ! ==============================================================================
-! This version of cg_drag_mod implements MS-GWaM as described in Bölöni et al.
-! (2021) and implemented in dsconnelly/python-msgwam on GitHub. A future version
-! of this code should allow switching gravity wave schemes in the namelist.
+! This module implements MS-GWaM as described in Bölöni et al. (2021) and as
+! implemented in dsconnelly/python-msgwam on GitHub.
 ! ==============================================================================
 
 use constants_mod,    only: constants_init, PI, RDGAS
@@ -25,7 +24,7 @@ character(len=128) :: tagname = "cayuga"
 ! public interfaces
 ! ==============================================================================
 
-public cg_drag_calc, cg_drag_end, cg_drag_init
+public msgwam_calc, msgwam_end, msgwam_init
 
 ! ==============================================================================
 ! namelist
@@ -53,7 +52,7 @@ logical :: use_shapiro_filter = .true.
 real :: H_rho = 8.e+3
 real :: N0 = 0.015
 
-namelist / cg_drag_nml / &
+namelist / msgwam_nml / &
     boundary_flux, break_waves, cp_center, cp_max, cp_width, dr_source, & 
     epsilon, lat_extrinsic, max_age, min_flux, mu, n_max, n_source, &
     source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
@@ -131,7 +130,7 @@ real, dimension(3) :: Bs = (/ 1. / 3., 15. / 16., 8. / 15. /)
 ! netCDF input/ouput variables
 ! ==============================================================================
 
-character(len=7) :: mod_name = "cg_drag"
+character(len=7) :: mod_name = "msgwam"
 integer :: id_flux_x, id_flux_y, id_accel_x, id_accel_y
 real, parameter :: missing_value = -999.
 
@@ -155,7 +154,7 @@ contains
 ! public subroutines
 ! ==============================================================================
 
-subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
+subroutine msgwam_init(lon_bounds, lat_bounds, p_ref, Time, axes)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -185,8 +184,8 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
         i_err = 1
 
         do while (i_err /= 0)
-            read(nml_unit, nml=cg_drag_nml, iostat=io)
-            i_err = check_nml_error(io, "cg_drag_nml")
+            read(nml_unit, nml=msgwam_nml, iostat=io)
+            i_err = check_nml_error(io, "msgwam_nml")
         end do
 
         call close_file(nml_unit)
@@ -196,7 +195,7 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     log_unit = stdlog()
 
     if (mpp_pe() == mpp_root_pe()) then
-        write (log_unit, nml=cg_drag_nml)
+        write (log_unit, nml=msgwam_nml)
     end if
     
     i_max = size(lon_bounds) - 1
@@ -250,9 +249,9 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     clocks(4) = mpp_clock_id("      MS-GWaM source", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
     clocks(5) = mpp_clock_id("      MS-GWaM fluxes", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
 
-end subroutine cg_drag_init
+end subroutine msgwam_init
 
-subroutine cg_drag_calc(i_start, j_start, lat, &
+subroutine msgwam_calc(i_start, j_start, lat, &
     p_full, z_full, temp, uuu, vvv, &
     Time, dt, du_dt, dv_dt)
 
@@ -300,14 +299,14 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
 
     call mpp_clock_end(clocks(5))
 
-end subroutine cg_drag_calc
+end subroutine msgwam_calc
 
-subroutine cg_drag_end
+subroutine msgwam_end
 
     call save_ray_state(rays, ghosts, last_meta)
     is_initialized = .false.
 
-end subroutine cg_drag_end
+end subroutine msgwam_end
 
 ! ==============================================================================
 ! dispersion relation subroutines
@@ -623,7 +622,7 @@ subroutine init_ray_state(rays, ghosts, last_meta)
             iostat=iostat, action="read")
 
         if (iostat /= 0) then
-            call error_mesg("cg_drag_mod", "error loading ray state", FATAL)
+            call error_mesg("msgwam_mod", "error loading ray state", FATAL)
         end if
 
         read(unit) rays
@@ -692,7 +691,7 @@ subroutine save_ray_state(rays, ghosts, last_meta)
         iostat=iostat, action="write")
 
     if (iostat /= 0) then
-        call error_mesg("cg_drag_mod", "error saving ray state", FATAL)
+        call error_mesg("msgwam_mod", "error saving ray state", FATAL)
     end if
 
     write(unit) rays
@@ -805,7 +804,7 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, &
                 end do
 
                 if (rays(add_at, i, j)%meta /= -1) then
-                    call error_mesg("cg_drag_mod", "too many rays", FATAL)
+                    call error_mesg("msgwam_mod", "too many rays", FATAL)
                 end if
 
                 rays(add_at, i, j) = source(n, i, j)
@@ -1430,4 +1429,4 @@ subroutine send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine send_nc_output
 
-end module cg_drag_mod
+end module msgwam_mod

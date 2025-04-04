@@ -1,4 +1,4 @@
-module cg_drag_mod
+module ad99_mod
 
 use fms_mod,                only:  fms_init, mpp_pe, mpp_root_pe,  &
                                    file_exist, check_nml_error,  &
@@ -32,6 +32,12 @@ private
 !    cg_drag_mod computes the convective gravity wave forcing on 
 !    the zonal flow. the parameterization is described in Alexander and 
 !    Dunkerton [JAS, 15 December 1999]. 
+
+!    As of April 2025, the public facing members of this module (subroutines and
+!    namelist) have been renamed by DSC with the ad99_ prefix instead of the
+!    cg_drag_ prefix, since I implemented MS-GWaM as an alterantive cg_drag
+!    scheme. Note that his file still contains non-code references to e.g.
+!    cg_drag_mod, though this is now called ad99_mod, and so on.
 !--------------------------------------------------------------------
   
 
@@ -39,7 +45,7 @@ private
 !----------- ****** VERSION NUMBER ******* ---------------------------
 
 
-character(len=128)  :: version =  '$Id: cg_drag.F90,v 19.0 2014/09/08 $'
+character(len=128)  :: version =  '$Id: ad99.F90,v 19.0 2014/09/08 $'
 character(len=128)  :: tagname =  '$Name: riga $'
 
 
@@ -48,7 +54,7 @@ character(len=128)  :: tagname =  '$Name: riga $'
 !-------  interfaces --------
 
 !mj removing restart stuff
-public    cg_drag_init, cg_drag_calc, cg_drag_end, &
+public    ad99_init, ad99_calc, ad99_end, &
           cg_drag_time_vary, cg_drag_endts
 !         cg_drag_restart
 
@@ -160,7 +166,7 @@ real,    dimension(MAX_PTS)  ::  lon_coords_gl=-999.
                                   ! columns [ degrees, 0. -> 360. ]
 
 
-namelist / cg_drag_nml /         &
+namelist / ad99_nml /         &
                           cg_drag_freq, cg_drag_offset, &
                           source_level_pressure, damp_level_pressure,   &
                           nk, cmax, dc, Bt_0, Bt_aug,  &
@@ -255,7 +261,7 @@ integer, dimension(:), allocatable :: diag_j, diag_i
 integer          :: id_kedx_cgwd, id_kedy_cgwd, id_bf_cgwd, &
                     id_gwfx_cgwd, id_gwfy_cgwd
 real             :: missing_value = -999.
-character(len=7) :: mod_name = 'cg_drag'
+character(len=7) :: mod_name = 'ad99'
 
 
 logical          :: module_is_initialized=.false.
@@ -276,7 +282,7 @@ logical          :: module_is_initialized=.false.
 
 !####################################################################
 
-subroutine cg_drag_init (lonb, latb, pref, Time, axes)
+subroutine ad99_init (lonb, latb, pref, Time, axes)
 
 
 !-------------------------------------------------------------------
@@ -353,8 +359,8 @@ type(time_type),         intent(in)      :: Time
       if (file_exist('input.nml')) then
         unit =  open_namelist_file ( )
         ierr=1; do while (ierr /= 0)
-        read (unit, nml=cg_drag_nml, iostat=io, end=10)
-        ierr = check_nml_error (io, 'cg_drag_nml')
+        read (unit, nml=ad99_nml, iostat=io, end=10)
+        ierr = check_nml_error (io, 'ad99_nml')
         enddo
 10      call close_file (unit)
       endif
@@ -364,7 +370,7 @@ type(time_type),         intent(in)      :: Time
 !---------------------------------------------------------------------
       call write_version_number (version, tagname)
       logunit = stdlog()
-      if (mpp_pe() == mpp_root_pe()) write (logunit, nml=cg_drag_nml)
+      if (mpp_pe() == mpp_root_pe()) write (logunit, nml=ad99_nml)
 
 !-------------------------------------------------------------------
 !  define the grid dimensions. idf and jdf are the (i,j) dimensions of 
@@ -452,7 +458,7 @@ type(time_type),         intent(in)      :: Time
 #ifdef COL_DIAG
       if (column_diagnostics_desired) then
         if (num_diag_pts > MAX_PTS) then
-          call error_mesg ( 'cg_drag_mod', &
+          call error_mesg ( 'ad99_mod', &
          ' must reset MAX_PTS or reduce number of diagnostic points', &
                                                      FATAL)
         endif
@@ -510,7 +516,7 @@ type(time_type),         intent(in)      :: Time
 !-------------------------------------------------------------------
       id_bf_cgwd =  &
          register_diag_field (mod_name, 'bf_cgwd', axes(1:3), Time, &
-              'buoyancy frequency from cg_drag', ' /s',   &
+              'buoyancy frequency from AD99', ' /s',   &
               missing_value=missing_value)
       id_gwfx_cgwd =  &
          register_diag_field (mod_name, 'gwfu_cgwd', axes(1:3), Time, &
@@ -522,11 +528,11 @@ type(time_type),         intent(in)      :: Time
               'm/s^2',  missing_value=missing_value)
       id_kedx_cgwd =  &
          register_diag_field (mod_name, 'kedx_cgwd', axes(1:3), Time, &
-               'effective eddy viscosity from cg_drag', 'm^2/s',   &
+               'effective eddy viscosity from AD99', 'm^2/s',   &
                missing_value=missing_value)
       id_kedy_cgwd =  &
          register_diag_field (mod_name, 'kedy_cgwd', axes(1:3), Time, &
-               'effective eddy viscosity from cg_drag', 'm^2/s',   &
+               'effective eddy viscosity from AD99', 'm^2/s',   &
                missing_value=missing_value)
 
 !--------------------------------------------------------------------
@@ -558,7 +564,7 @@ type(time_type),         intent(in)      :: Time
 !mj check day is multiple of cg_drag_freq (as restart capability has been removed)
      if( cg_drag_freq /= 0 ) then
         if( modulo(86400,cg_drag_freq) /= 0 ) then
-           call error_mesg('cg_drag','cg_drag_freq must divide 86400 (full day) or equal 0', FATAL)
+           call error_mesg('ad99','cg_drag_freq must divide 86400 (full day) or equal 0', FATAL)
         endif
      endif
      gwd_u(:,:,:) = 0.0
@@ -580,7 +586,7 @@ type(time_type),         intent(in)      :: Time
 
 
 
-end subroutine cg_drag_init
+end subroutine ad99_init
 
 
 !####################################################################
@@ -617,7 +623,7 @@ end subroutine cg_drag_endts
 
 !####################################################################
 
-subroutine cg_drag_calc (is, js, lat, pfull, zfull, temp, uuu, vvv,  &
+subroutine ad99_calc (is, js, lat, pfull, zfull, temp, uuu, vvv,  &
                          Time, delt, gwfcng_x, gwfcng_y)
 !--------------------------------------------------------------------  
 !    cg_drag_calc defines the arrays needed to calculate the convective
@@ -913,13 +919,13 @@ real, dimension(:,:,:), intent(out)     :: gwfcng_x, gwfcng_y
      
 
 
-end subroutine cg_drag_calc
+end subroutine ad99_calc
 
 
 
 !###################################################################
 
-subroutine cg_drag_end
+subroutine ad99_end
 
 !--------------------------------------------------------------------
 !    cg_drag_end is the destructor for cg_drag_mod.
@@ -951,7 +957,7 @@ subroutine cg_drag_end
 !---------------------------------------------------------------------
 
 
-end subroutine cg_drag_end
+end subroutine ad99_end
 
 
 
@@ -1412,7 +1418,7 @@ real,    dimension(:,:,0:),  intent(out)            :: ked
 !      stress to a flux.
 !---------------------------------------------------------------------
           if (Bsum == 0.0) then
-            call error_mesg ('cg_drag_mod', &
+            call error_mesg ('ad99_mod', &
                ' zero flux input at source level', FATAL)
           endif
           !epg: eps = (ampl*1.5/nk)/Bsum
@@ -1608,6 +1614,4 @@ end subroutine gwfc
 !####################################################################
 
 
-end module cg_drag_mod
-
-
+end module ad99_mod

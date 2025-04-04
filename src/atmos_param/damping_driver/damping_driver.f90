@@ -19,7 +19,8 @@ module damping_driver_mod
 !-----------------------------------------------------------------------
 
  use      mg_drag_mod, only:  mg_drag, mg_drag_init, mg_drag_end
- use      cg_drag_mod, only:  cg_drag_init, cg_drag_calc, cg_drag_end
+ use         ad99_mod, only:  ad99_init, ad99_calc, ad99_end
+ use       msgwam_mod, only:  msgwam_init, msgwam_calc, msgwam_end
  use    topo_drag_mod, only:  topo_drag_init, topo_drag, topo_drag_end
  use          fms_mod, only:  file_exist, mpp_pe, mpp_root_pe, stdlog, &
                               write_version_number, &
@@ -48,16 +49,23 @@ module damping_driver_mod
 !     Non-orographic gravity wave parameterization, updated as for Cohen et al. 2013
 ! mj actively choose rayleigh friction
    logical  :: do_rayleigh = .false.
-   logical  :: do_cg_drag = .false.
    logical  :: do_topo_drag = .false.
    logical  :: do_const_drag = .false.
    real     :: const_drag_amp = 3.e-04
    real     :: const_drag_off = 0.
    logical  :: do_conserve_energy = .false.
 
+   ! DSC: do_cg_drag is replaced by an integer, cg_drag_scheme. The options are
+   !    0 : no cg drag
+   !    1 : AD99
+   !    2 : MS-GWaM
+   ! Note that to be the least disruptive possible, the AD99 code is still named
+   ! cg_drag_mod, but the two options are on equal footing here.
+   integer :: cg_drag_scheme = 0
+
    namelist /damping_driver_nml/  trayfric,  &
                                   do_rayleigh, sponge_pbottom,  & ! mj
-                                  do_cg_drag, do_topo_drag, &
+                                  cg_drag_scheme, do_topo_drag, &
                                   do_mg_drag, do_conserve_energy, &
                                   do_const_drag, const_drag_amp,const_drag_off    !mj
 
@@ -246,13 +254,21 @@ contains
 
    endif
 
+   if (cg_drag_scheme == 1) then
 !   Alexander-Dunkerton gravity wave drag
+    ! DSC updates to include option for MS-GWaM
 
-   if (do_cg_drag) then
 !mj updating call to riga version of cg_drag
       !call cg_drag_calc (is, js, lat, pfull, zfull, t, u, Time,    &
       !                  delt, utnd)
-      call cg_drag_calc (is, js, lat, pfull, zfull, t, u, v, Time, delt, utnd, vtnd)
+      call ad99_calc (is, js, lat, pfull, zfull, t, u, v, Time, delt, utnd, vtnd)
+
+   else if (cg_drag_scheme == 2) then
+        call msgwam_calc (is, js, lat, pfull, zfull, t, u, v, Time, delt, utnd, vtnd)
+   end if
+
+   if (cg_drag_scheme > 0) then
+
      udt =  udt + utnd
      vdt =  vdt + vtnd !mj
 
@@ -409,10 +425,12 @@ contains
    if (do_mg_drag) call mg_drag_init (lonb, latb, sgsmtn)
 
 !--------------------------------------------------------------------
-!----- Alexander-Dunkerton gravity wave drag -----
+!----- Alexander-Dunkerton or MS-GWaM gravity wave drag -----
 
-   if (do_cg_drag)  then
-     call cg_drag_init (lonb, latb, pref, Time=Time, axes=axes)
+   if (cg_drag_scheme == 1) then
+     call ad99_init (lonb, latb, pref, Time=Time, axes=axes)
+   else if (cg_drag_scheme == 2) then
+     call msgwam_init (lonb, latb, pref, Time=Time, axes=axes)
    endif
 
 !-----------------------------------------------------------------------
@@ -486,7 +504,7 @@ if (do_mg_drag) then
                                  'W/m2' )
 endif
 
-   if (do_cg_drag) then
+   if (cg_drag_scheme > 0) then
 
     id_udt_cgwd = &
     register_diag_field ( mod_name, 'udt_cgwd', axes(1:3), Time,        &
@@ -561,7 +579,11 @@ endif
  subroutine damping_driver_end
 
      if (do_mg_drag) call mg_drag_end
-     if (do_cg_drag)   call cg_drag_end
+     if (cg_drag_scheme == 1) then
+        call ad99_end
+     else if (cg_drag_scheme == 2) then
+        call msgwam_end
+     end if
      if (do_topo_drag) call topo_drag_end
 
      module_is_initialized =.false.

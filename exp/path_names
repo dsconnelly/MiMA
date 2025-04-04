@@ -81,6 +81,7 @@ atmos_param/astronomy/astronomy.f90
 atmos_param/betts_miller/betts_miller.f90
 atmos_param/betts_miller/bm_massflux.f90
 atmos_param/betts_miller/bm_omp.f90
+atmos_param/cg_drag/ad99.f90
 atmos_param/cg_drag/msgwam.f90
 atmos_param/cloud_generator/null/cloud_generator.f90
 atmos_param/cloud_rad/cloud_rad.f90
