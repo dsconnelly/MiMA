@@ -10,10 +10,15 @@
 #SBATCH --mail-type=END,FAIL
 
 cd RUN_DIR
-./modules.sh
+
+module purge
+module load netcdf-c/intel/4.7.4
+module load netcdf-fortran/intel/4.5.3
+module load openmpi/intel/4.1.1
+module load cdo/intel/1.9.10
 
 for yy in {01..01}; do
-    mpirun -n ${SLURM_NTASKS} ./mima.x
+    srun ./mima.x
 
     ccomb=/home/dsc7746/MiMA/bin/mppnccombine.greene
     for fname in *.nc.0000; do

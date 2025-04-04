@@ -1,22 +1,24 @@
 "MiMA"
 0001 1 1 0 0 0
 #output files
-"atmos_dmean",    24, "hours", 1, "days", "time",
+"atmos_4xdaily",    6, "hours", 1, "days", "time",
 #diagnostic field entries. 
 # quantities needed for plevel interpolation,
- "dynamics",        "bk",         "bk",             "atmos_dmean",    "all", .true., "none", 2,
- "dynamics",        "pk",         "pk",             "atmos_dmean",    "all", .true., "none", 2,
- "dynamics",        "ps",         "ps",             "atmos_dmean",    "all", .true., "none", 2,
+ "dynamics",        "bk",         "bk",             "atmos_4xdaily",    "all", .false., "none", 2,
+ "dynamics",        "pk",         "pk",             "atmos_4xdaily",    "all", .false., "none", 2,
+ "dynamics",        "ps",         "ps",             "atmos_4xdaily",    "all", .false., "none", 2,
 # dynamics variables
- "dynamics",        "ucomp",      "ucomp",          "atmos_dmean",    "all", .true., "none", 2,
- "dynamics",        "vcomp",      "vcomp",          "atmos_dmean",    "all", .true., "none", 2,
- "dynamics",        "temp",       "temp",           "atmos_dmean",    "all", .true., "none", 2,
- "dynamics",        "sphum",      "sphum",          "atmos_dmean",    "all", .true., "none", 2,
+ "dynamics",        "ucomp",      "ucomp",          "atmos_4xdaily",    "all", .false., "none", 2,
+ "dynamics",        "vcomp",      "vcomp",          "atmos_4xdaily",    "all", .false., "none", 2,
+ "dynamics",        "temp",       "temp",           "atmos_4xdaily",    "all", .false., "none", 2,
+ "dynamics",        "sphum",      "sphum",          "atmos_4xdaily",    "all", .false., "none", 2,
 # gravity wave variables
- "cg_drag",         "gw_flux_x",  "gw_flux_x",      "atmos_dmean",    "all", .true., "none", 2,
- "cg_drag",         "gw_flux_y",  "gw_flux_y",      "atmos_dmean",    "all", .true., "none", 2,
+ "cg_drag",         "gw_flux_x",  "gw_flux_x",      "atmos_4xdaily",    "all", .false., "none", 2,
+ "cg_drag",         "gw_flux_y",  "gw_flux_y",      "atmos_4xdaily",    "all", .false., "none", 2,
+ "cg_drag",         "gw_accel_x", "gw_accel_x",     "atmos_4xdaily",    "all", .false., "none", 2,
+ "cg_drag",         "gw_accel_y", "gw_accel_y",     "atmos_4xdaily",    "all", .false., "none", 2,
 # moisture variables
-  "moist",          "precip",     "precip",         "atmos_dmean",    "all", .true., "none", 2,
+  "moist",          "precip",     "precip",         "atmos_4xdaily",    "all", .false., "none", 2,
 #=============================================================================================
 #
 #  FORMATS FOR FILE ENTRIES (not all input values are used)

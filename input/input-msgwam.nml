@@ -1,6 +1,6 @@
 &coupler_nml
-   days   = 30,
-   dt_atmos =500,
+   days   = 360,
+   dt_atmos =120,
    current_date = 0001,1,1,0,0,0
    calendar = 'thirty_day' /
 
@@ -107,24 +107,24 @@
 	water_file = 'INPUT/navy_pctwater.data.nc' /
 
  &cg_drag_nml
-    boundary_flux   = 0.04,
-    dr_source       = 1500.,
-    cp_center       = 15.,
-    cp_max          = 50.,
-    cp_width        = 10.,
-    dk_source       = 0.0001,
-    dl_source       = 0.0001,
-    epsilon         = 1.,
-    extrinsic       = .true.,
-    max_age         = 864000,
-    min_flux        = 1.e-8,
-    n_max           = 500,
-    n_source        = 24,
-    padding_z       = 500.,
-    source_pressure = 300.e+2,
-    T_hat_source    = 36000.,
-    H_rho           = 8.e+3,
-    N0              = 0.015 /
+    boundary_flux      = 0.04,
+    break_waves        = .true.,
+    dr_source          = 1500.,
+    cp_center          = 0.,
+    cp_max             = 50.,
+    cp_width           = 35.,
+    epsilon            = 0.,
+    lat_extrinsic      = 20.,
+    max_age            = 864000,
+    min_flux           = 1.e-8,
+    mu                 = 1.e-3,
+    n_max              = 250,
+    n_source           = 24,
+    source_pressure    = 300.e+2,
+    T_hat_source       = 36000.,
+    use_shapiro_filter = .true.,
+    H_rho              = 8.e+3,
+    N0                 = 0.015 /
 
  &moist_processes_nml
      do_bm           =.true.,   

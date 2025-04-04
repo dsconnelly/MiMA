@@ -37,8 +37,7 @@ real :: cp_center = 0.
 real :: cp_max = 50.
 real :: cp_width = 10.
 real :: dr_source = 1000.
-real :: epsilon = 1.
-logical :: from_restart = .false.
+real :: epsilon = 0.
 real :: lat_extrinsic = 15.
 integer :: max_age = 10 * 86400
 real :: min_flux = 1.e-8
@@ -56,8 +55,8 @@ real :: N0 = 0.015
 
 namelist / cg_drag_nml / &
     boundary_flux, break_waves, cp_center, cp_max, cp_width, dr_source, & 
-    epsilon, from_restart, lat_extrinsic, max_age, min_flux, mu, n_max, &
-    n_source, source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
+    epsilon, lat_extrinsic, max_age, min_flux, mu, n_max, n_source, &
+    source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
 
 ! ==============================================================================
 ! derived type definitions
@@ -70,6 +69,7 @@ namelist / cg_drag_nml / &
 type :: t_ray
     real :: r, dr, k, l, m, dm, dens
     integer :: age, meta, q_lo, q_mid, q_hi
+    logical :: is_ghost
 end type t_ray
 
 ! The t_inc type is used for increments to the ray volume properties that are
@@ -104,12 +104,14 @@ real, dimension(:, :, :), allocatable :: z_padded
 type(t_ray), dimension(:, :, :), allocatable :: rays
 type(t_inc), dimension(:, :, :), allocatable :: increments
 real, dimension(:, :, :), allocatable :: flux_x, flux_y
+integer, dimension(:, :, :), allocatable :: ghosts
 
 ! ==============================================================================
 ! ray volume source variables
 ! ==============================================================================
 
 integer :: n_per_dir
+logical :: is_stochastic
 real :: dc_source, omega_hat_source
 integer, dimension(:, :), allocatable :: last_meta
 type(t_ray), dimension(:, :, :), allocatable :: source
@@ -165,7 +167,7 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, i_err, io, j, log_unit, n, nml_unit, q
+    integer :: i_err, io, j, log_unit, nml_unit, q
     real :: lat
 
     ! --------------------------------------------------------------------------
@@ -212,12 +214,13 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(flux_y(q_max + 1, i_max, j_max))
 
     allocate(rays(n_max, i_max, j_max))
-    allocate(increments(n_max, i_max, j_max))
-    allocate(source(n_source, i_max, j_max))
+    allocate(ghosts(n_source, i_max, j_max))
     allocate(last_meta(i_max, j_max))
 
-    call init_ray_state(rays)
-    last_meta = 1
+    call init_ray_state(rays, ghosts, last_meta)
+
+    allocate(increments(n_max, i_max, j_max))
+    allocate(source(n_source, i_max, j_max))
 
     do q = 1, q_max
         if (p_ref(q) > source_pressure) then
@@ -239,6 +242,7 @@ subroutine cg_drag_init(lon_bounds, lat_bounds, p_ref, Time, axes)
 
     call init_source
     call init_nc_output(axes, Time)
+    is_stochastic = epsilon > 0.
 
     clocks(1) = mpp_clock_id("      MS-GWaM mean state", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
     clocks(2) = mpp_clock_id("      MS-GWaM RK3", grain=CLOCK_ROUTINE, flags=MPP_CLOCK_SYNC)
@@ -284,7 +288,8 @@ subroutine cg_drag_calc(i_start, j_start, lat, &
     call mpp_clock_begin(clocks(4))
 
     call check_boundaries(z_padded, rays)
-    call check_source(z_padded, u_bar, v_bar, dt / 2., rays, last_meta, source)
+    call check_source(z_padded, u_bar, v_bar, dt / 2., rays, ghosts, &
+        last_meta, source)
 
     call mpp_clock_end(clocks(4))
     call mpp_clock_begin(clocks(5))
@@ -299,7 +304,7 @@ end subroutine cg_drag_calc
 
 subroutine cg_drag_end
 
-    call save_ray_state(rays)
+    call save_ray_state(rays, ghosts, last_meta)
     is_initialized = .false.
 
 end subroutine cg_drag_end
@@ -586,34 +591,47 @@ end subroutine update_mean_state
 ! ray volume state and sort helpers
 ! ==============================================================================
 
-subroutine init_ray_state(rays)
+subroutine init_ray_state(rays, ghosts, last_meta)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     type(t_ray), dimension(:, :, :), intent(out) :: rays
+    integer, dimension(:, :, :),     intent(out) :: ghosts
+    integer, dimension(:, :),        intent(out) :: last_meta
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: iostat, unit
+    character(len=32) :: fname, pe_str
+    logical :: from_restart
 
     ! --------------------------------------------------------------------------
 
+    write(pe_str, "(I2.2)") mpp_pe()
+    fname = "INPUT/rays-" // trim(pe_str) // ".dat"
+    inquire(file=trim(fname), exist=from_restart)
+
     if (.not. from_restart) then
         rays(:, :, :)%meta = -1
-        return
+        ghosts(:, :, :) = -1
+        last_meta(:, :) = 1
+    
+    else
+        open(newunit=unit, file=trim(fname), form="unformatted", &
+            iostat=iostat, action="read")
+
+        if (iostat /= 0) then
+            call error_mesg("cg_drag_mod", "error loading ray state", FATAL)
+        end if
+
+        read(unit) rays
+        read(unit) ghosts
+        read(unit) last_meta
+
+        close(unit)
     end if
-
-    open(unit, file="INPUT/rays.dat", form="unformatted", &
-        iostat=iostat, action="read")
-
-    if (iostat /= 0) then
-        call error_mesg("cg_drag_mod", "error loading ray state", FATAL)
-    end if
-
-    read(unit) rays
-    close(unit)
 
 end subroutine init_ray_state
 
@@ -644,25 +662,33 @@ pure subroutine delete_ray(n, i, j, rays)
         ray%q_lo = -1
         ray%q_mid = -1
         ray%q_hi = -1
+
+        ray%is_ghost = .false.
     end associate
 
 end subroutine delete_ray
 
-subroutine save_ray_state(rays)
+subroutine save_ray_state(rays, ghosts, last_meta)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    type(t_ray), dimension(:, :, :) , intent(in) :: rays
+    type(t_ray), dimension(:, :, :), intent(in) :: rays
+    integer, dimension(:, :, :),     intent(in) :: ghosts
+    integer, dimension(:, :),        intent(in) :: last_meta
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: iostat, unit
+    character(len=32) :: fname, pe_str
 
     ! --------------------------------------------------------------------------
 
-    open(unit, file="RESTART/rays.dat", form="unformatted", &
+    write(pe_str, "(I2.2)") mpp_pe()
+    fname = "RESTART/rays-" // trim(pe_str) // ".dat"
+
+    open(newunit=unit, file=fname, form="unformatted", &
         iostat=iostat, action="write")
 
     if (iostat /= 0) then
@@ -670,6 +696,9 @@ subroutine save_ray_state(rays)
     end if
 
     write(unit) rays
+    write(unit) ghosts
+    write(unit) last_meta
+
     close(unit)
 
 end subroutine save_ray_state
@@ -719,7 +748,8 @@ end function locate
 ! ray volume source subroutines
 ! ==============================================================================
 
-subroutine check_source(z_padded, u_bar, v_bar, dt, rays, last_meta, source)
+subroutine check_source(z_padded, u_bar, v_bar, dt, &
+    rays, ghosts, last_meta, source)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -728,6 +758,7 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, rays, last_meta, source)
     real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar
     real,                            intent(in)    :: dt
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
+    integer, dimension(:, :, :),     intent(inout) :: ghosts
     integer, dimension(:, :),        intent(inout) :: last_meta
     type(t_ray), dimension(:, :, :), intent(out)   :: source
 
@@ -751,7 +782,9 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, rays, last_meta, source)
         end do
     end do
 
-    call update_source(z_padded, u_bar, v_bar, dt, last_meta, source, n_excess)
+    call update_source(z_padded, u_bar, v_bar, dt, rays, ghosts, &
+        last_meta, source, n_excess)
+
     n_excess = max(n_excess - n_max, 0)
     call prune(n_excess, rays)
 
@@ -776,6 +809,15 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, rays, last_meta, source)
                 end if
 
                 rays(add_at, i, j) = source(n, i, j)
+
+                if (.not. is_stochastic) then
+                    if (ghosts(n, i, j) > 0) then
+                        rays(ghosts(n, i, j), i, j)%is_ghost = .false.
+                    end if
+
+                    ghosts(n, i, j) = add_at
+                end if
+
             end do
         end do
     end do
@@ -833,11 +875,11 @@ pure subroutine find_lowest_energies(n_find, rays, idx)
     do j = 1, j_max
         do i = 1, i_max
             do n = 1, n_max
-                if (rays(n, i, j)%meta == -1) then
-                    cycle
-                end if
-
                 associate (ray => rays(n, i, j))
+                    if ((ray%meta == -1) .or. ray%is_ghost) then
+                        cycle
+                    end if
+
                     omega_hat = get_omega_hat(ray, coriolis_sq(j))
                     energy = ray%dens * ray%dm * omega_hat
                 end associate
@@ -897,7 +939,7 @@ pure subroutine prune(n_excess, rays)
 
 end subroutine prune
 
-subroutine update_source(z_padded, u_bar, v_bar, dt, &
+subroutine update_source(z_padded, u_bar, v_bar, dt, rays, ghosts, &
     last_meta, source, n_added)
 
     ! --------------------------------------------------------------------------
@@ -906,6 +948,8 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
     real, dimension(0:, :, :),       intent(in)    :: z_padded
     real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar
     real,                            intent(in)    :: dt
+    type(t_ray), dimension(:, :, :), intent(in)    :: rays
+    integer, dimension(:, :, :),     intent(in)    :: ghosts
     integer, dimension(:, :),        intent(inout) :: last_meta
     type(t_ray), dimension(:, :, :), intent(out)   :: source
     integer, dimension(:, :),        intent(out)   :: n_added
@@ -913,8 +957,9 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
+    logical :: proceed
+    real :: cg, cp, k, l, m, r, u, v, wvn_hor
     integer :: dir, i, j, n, s, q_hi, q_mid, q_lo
-    real :: cg, cp, k, l, m, prob, r, u, v, wvn_hor
     real, dimension(size(source, 1), size(source, 2), size(source, 3)) :: rand
 
     ! --------------------------------------------------------------------------
@@ -923,13 +968,25 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
 
     do j = 1, j_max
         do i = 1, i_max
-            r = z_padded(q_source, i, j) - dr_source / 2.
-            q_hi = locate(r + dr_source / 2., z_padded(1:, i, j), q_source)
-            q_lo = locate(r - dr_source / 2., z_padded(1:, i, j), q_source)
-            q_mid = locate(r, z_padded(1:, i, j), q_source)
+            r = z_padded(q_source, i, j)
+            q_hi = locate(r, z_padded(1:, i, j), q_source)
+            q_lo = locate(r - dr_source, z_padded(1:, i, j), q_source)
+            q_mid = locate(r - dr_source / 2., z_padded(1:, i, j), q_source)
 
             do dir = 1, 4
                 do n = 1, n_per_dir
+                    s = (dir - 1) * n_per_dir + n
+
+                    if (.not. is_stochastic) then
+                        if (ghosts(s, i, j) > 0) then
+                            associate(ray => rays(ghosts(s, i, j), i, j))
+                                if ((ray%r - ray%dr / 2.) < r) then
+                                    source(s, i, j)%meta = -1
+                                    cycle
+                                end if
+                            end associate
+                        end if
+                    end if
 
                     cp = cp_source(n)
                     if (extrinsic(j)) then
@@ -944,11 +1001,14 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
 
                     m = get_m(k, l, coriolis_sq(j))
                     cg = get_cg_r(k, l, m, coriolis_sq(j))
-                    prob = epsilon * cg * dt / dr_source
-                    s = (dir - 1) * n_per_dir + n
 
-                    if (rand(s, i, j) < prob) then
-                        source(s, i, j)%r = r
+                    proceed = .true.
+                    if (is_stochastic) then
+                        proceed = rand(s, i, j) < epsilon * cg * dt / dr_source
+                    end if
+                        
+                    if (proceed) then
+                        source(s, i, j)%r = r - dr_source / 2.
                         source(s, i, j)%dr = dr_source
 
                         source(s, i, j)%k = k
@@ -969,6 +1029,7 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, &
                         source(s, i, j)%q_hi = q_hi
                         source(s, i, j)%q_lo = q_lo
 
+                        source(s, i, j)%is_ghost = .not. is_stochastic
                     else
                         source(s, i, j)%meta = -1
                     end if
@@ -1104,7 +1165,7 @@ pure subroutine apply_dissipation(z_padded, rho, dt, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n
-    real :: damping, omega_hat, nu, nu_hi, nu_lo, r, wvn_sq, z_hi, z_lo
+    real :: damping, omega_hat, nu, nu_hi, nu_lo, wvn_sq, z_hi, z_lo
 
     ! --------------------------------------------------------------------------
 
@@ -1128,7 +1189,7 @@ pure subroutine apply_dissipation(z_padded, rho, dt, rays)
                     nu_lo = mu / rho(ray%q_mid + 1, i, j)
 
                     nu = ( &
-                        (nu_lo * (z_hi - r) + nu_hi * (r - z_lo)) / &
+                        (nu_lo * (z_hi - ray%r) + nu_hi * (ray%r - z_lo)) / &
                         (z_hi - z_lo) &
                     )
 
@@ -1148,7 +1209,7 @@ pure subroutine apply_dissipation(z_padded, rho, dt, rays)
 
 end subroutine apply_dissipation
 
-pure subroutine check_boundaries(z_padded, rays)
+ subroutine check_boundaries(z_padded, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -1161,25 +1222,29 @@ pure subroutine check_boundaries(z_padded, rays)
     ! --------------------------------------------------------------------------
     logical :: delete
     integer :: i, j, n
-    real :: cg, flux, wvn
+    real :: cg, flux, wvn, z_lo, z_hi
 
     ! --------------------------------------------------------------------------
 
     do j = 1, j_max
         do i = 1, i_max
-            do n = 1, n_max
-                if (rays(n, i, j)%meta == -1) then
-                    cycle
-                end if
+            z_lo = z_padded(q_max + 1, i, j)
+            z_hi = z_padded(0, i, j)
 
+            do n = 1, n_max
                 associate (ray => rays(n, i, j))
+                    if (ray%meta == -1 .or. ray%is_ghost) then
+                        cycle
+                    end if
+
                     cg = get_cg_r(ray, coriolis_sq(j))
                     wvn = sqrt(ray%k ** 2 + ray%l ** 2)
                     flux = wvn * ray%dens * ray%dm * cg
 
-                    delete = ray%r - ray%dr / 2. > z_padded(1, i, j)
+                    delete = ray%r + ray%dr / 2. < z_lo
+                    delete = delete .or. (ray%r - ray%dr / 2.) > z_hi
                     delete = delete .or. (abs(flux) < min_flux)
-                    delete = delete .or. ray%age > max_age
+                    delete = delete .or. (ray%age > max_age)
                 end associate
 
                 if (delete) then
@@ -1210,8 +1275,8 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, dt, rays, increments)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
+    real :: dm_dt, dr_dt, dz
     integer i, j, n, q, stage
-    real :: dm_dt, dr_dt, dz, z_hi, z_lo
     real, dimension(size(u_bar, 1) - 1, size(u_bar, 2), size(u_bar, 3)) :: &
         du_dr, dv_dr
 
@@ -1250,15 +1315,20 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, dt, rays, increments)
                         )
 
                         inc%r = As(stage) * inc%r + dt * dr_dt
-                        inc%m = As(stage) * inc%m + dt * dm_dt
-
                         ray%r = ray%r + Bs(stage) * inc%r
-                        ray%m = ray%m + Bs(stage) * inc%m
+
+                        if (.not. ray%is_ghost) then
+                            inc%m = As(stage) * inc%m + dt * dm_dt
+                            ray%m = ray%m + Bs(stage) * inc%m
+                        end if
+
                         ray%q_mid = locate(ray%r, z, ray%q_mid)
 
                         if (stage == 3) then
                             ray%q_hi = locate(ray%r + ray%dr / 2., z, ray%q_hi)
                             ray%q_lo = locate(ray%r - ray%dr / 2., z, ray%q_lo)
+
+                            ray%age = ray%age + dt
                         end if
 
                     end associate
@@ -1334,7 +1404,7 @@ subroutine send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, i_err, j, q
+    integer :: i_err
     real, dimension(size(flux_x, 2), size(flux_x, 3), size(flux_x, 1) - 1) :: &
         tmp
 
