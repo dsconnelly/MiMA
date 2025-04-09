@@ -75,7 +75,7 @@ end type t_ray
 ! evolved in time. Again, for now this includes only r and m.
 
 type :: t_inc
-    real :: r, m
+    real :: r, m, dr
 end type t_inc
 
 ! ==============================================================================
@@ -1309,10 +1309,11 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    real :: dm_dt, dr_dt, dz
     integer i, j, n, q, stage
+    real :: cg_hi, cg_lo, ddr_dt, dm_dt, dr_dt, dz
     real, dimension(size(u_bar, 1) - 1, size(u_bar, 2), size(u_bar, 3)) :: &
         du_dr, dv_dr
+    real, dimension(size(rays, 1), size(rays, 2), size(rays, 3)) :: area
 
     ! --------------------------------------------------------------------------
 
@@ -1325,6 +1326,8 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
             end do
         end do
     end do
+
+    area = rays(:, :, :)%dr * rays(:, :, :)%dm
 
     do stage = 1, 3
 
@@ -1342,9 +1345,16 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
                         z => z_padded(1:, i, j) &
                     )
 
-                        dr_dt = get_cg_r( &
-                            ray, N2(ray%q_mid, i, j), coriolis_sq(j) &
+                        cg_hi = get_cg_r( &
+                            ray, N2(ray%q_hi, i, j), coriolis_sq(j) &
                         )
+
+                        cg_lo = get_cg_r( &
+                            ray, N2(ray%q_lo, i, j), coriolis_sq(j) &
+                        )
+
+                        dr_dt = (cg_hi + cg_lo) / 2
+                        ddr_dt = cg_hi - cg_lo
 
                         dm_dt = -( &
                             du_dr(ray%q_mid, i, j) * ray%k + &
@@ -1355,16 +1365,19 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
                         ray%r = ray%r + Bs(stage) * inc%r
 
                         if (.not. ray%is_ghost) then
+                            inc%dr = As(stage) * inc%dr + dt * ddr_dt
+                            ray%dr = ray%dr + Bs(stage) * inc%dr
+
                             inc%m = As(stage) * inc%m + dt * dm_dt
                             ray%m = ray%m + Bs(stage) * inc%m
                         end if
 
                         ray%q_mid = locate(ray%r, z, ray%q_mid)
+                        ray%q_hi = locate(ray%r + ray%dr / 2., z, ray%q_hi)
+                        ray%q_lo = locate(ray%r - ray%dr / 2., z, ray%q_lo)
 
                         if (stage == 3) then
-                            ray%q_hi = locate(ray%r + ray%dr / 2., z, ray%q_hi)
-                            ray%q_lo = locate(ray%r - ray%dr / 2., z, ray%q_lo)
-
+                            ray%dm = area(n, i, j) / ray%dr
                             ray%age = ray%age + dt
                         end if
 
