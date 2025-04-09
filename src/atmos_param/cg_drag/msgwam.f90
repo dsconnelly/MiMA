@@ -113,8 +113,8 @@ integer :: n_per_dir
 logical :: is_stochastic
 real :: dc_source, omega_hat_source
 integer, dimension(:, :), allocatable :: last_meta
-type(t_ray), dimension(:, :, :), allocatable :: source
-real, dimension(:), allocatable :: cp_source, flux_source
+type(t_ray), dimension(:, :, :), allocatable :: launches
+real, dimension(:), allocatable :: cp_source
 
 real, dimension(4) :: cos_phi = (/ 1., 0., -1., 0. /)
 real, dimension(4) :: sin_phi = (/ 0., 1., 0., -1. /)
@@ -219,7 +219,7 @@ subroutine msgwam_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     call init_ray_state(rays, ghosts, last_meta)
 
     allocate(increments(n_max, i_max, j_max))
-    allocate(source(n_source, i_max, j_max))
+    allocate(launches(n_source, i_max, j_max))
 
     do q = 1, q_max
         if (p_ref(q) > source_pressure) then
@@ -288,7 +288,7 @@ subroutine msgwam_calc(i_start, j_start, lat, &
 
     call check_boundaries(z_padded, rays)
     call check_source(z_padded, u_bar, v_bar, dt / 2., rays, ghosts, &
-        last_meta, source)
+        last_meta, launches)
 
     call mpp_clock_end(clocks(4))
     call mpp_clock_begin(clocks(5))
@@ -748,7 +748,7 @@ end function locate
 ! ==============================================================================
 
 subroutine check_source(z_padded, u_bar, v_bar, dt, &
-    rays, ghosts, last_meta, source)
+    rays, ghosts, last_meta, launches)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -759,7 +759,7 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, &
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
     integer, dimension(:, :, :),     intent(inout) :: ghosts
     integer, dimension(:, :),        intent(inout) :: last_meta
-    type(t_ray), dimension(:, :, :), intent(out)   :: source
+    type(t_ray), dimension(:, :, :), intent(out)   :: launches
 
     ! --------------------------------------------------------------------------
     ! local variables
@@ -781,8 +781,8 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, &
         end do
     end do
 
-    call update_source(z_padded, u_bar, v_bar, dt, rays, ghosts, &
-        last_meta, source, n_excess)
+    call get_launches(z_padded, u_bar, v_bar, dt, rays, ghosts, &
+        last_meta, launches, n_excess)
 
     n_excess = max(n_excess - n_max, 0)
     call prune(n_excess, rays)
@@ -792,7 +792,7 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, &
             add_at = 1
 
             do n = 1, n_source
-                if (source(n, i, j)%meta == -1) then
+                if (launches(n, i, j)%meta == -1) then
                     cycle
                 end if
 
@@ -807,7 +807,7 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, &
                     call error_mesg("msgwam_mod", "too many rays", FATAL)
                 end if
 
-                rays(add_at, i, j) = source(n, i, j)
+                rays(add_at, i, j) = launches(n, i, j)
 
                 if (.not. is_stochastic) then
                     if (ghosts(n, i, j) > 0) then
@@ -829,24 +829,17 @@ subroutine init_source
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: n
-    real :: arg, total
 
     ! --------------------------------------------------------------------------
 
     n_per_dir = n_source / 4
     dc_source = cp_max / n_per_dir
-
     allocate(cp_source(n_per_dir))
-    allocate(flux_source(n_per_dir))
 
     do n = 1, n_per_dir
         cp_source(n) = (n - 0.5) * dc_source
-        arg = (cp_source(n) - cp_center) / cp_width
-        flux_source(n) = exp(-0.5 * (arg ** 2))
     end do
 
-    total = sum(flux_source)
-    flux_source = flux_source * (boundary_flux / 4) / total
     omega_hat_source = 2 * PI / T_hat_source
 
 end subroutine init_source
@@ -938,8 +931,8 @@ pure subroutine prune(n_excess, rays)
 
 end subroutine prune
 
-subroutine update_source(z_padded, u_bar, v_bar, dt, rays, ghosts, &
-    last_meta, source, n_added)
+subroutine get_launches(z_padded, u_bar, v_bar, dt, rays, ghosts, &
+    last_meta, launches, n_added)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -950,16 +943,17 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, rays, ghosts, &
     type(t_ray), dimension(:, :, :), intent(in)    :: rays
     integer, dimension(:, :, :),     intent(in)    :: ghosts
     integer, dimension(:, :),        intent(inout) :: last_meta
-    type(t_ray), dimension(:, :, :), intent(out)   :: source
+    type(t_ray), dimension(:, :, :), intent(out)   :: launches
     integer, dimension(:, :),        intent(out)   :: n_added
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     logical :: proceed
-    real :: cg, cp, k, l, m, r, u, v, wvn_hor
     integer :: dir, i, j, n, s, q_hi, q_mid, q_lo
-    real, dimension(size(source, 1), size(source, 2), size(source, 3)) :: rand
+    real :: cg, cp, flux, k, l, m, mag_cp_hat, mag_wvn_hor, r, total, u, v
+    real, dimension(size(launches, 1), size(launches, 2), size(launches, 3)) &
+        :: rand
 
     ! --------------------------------------------------------------------------
 
@@ -972,72 +966,89 @@ subroutine update_source(z_padded, u_bar, v_bar, dt, rays, ghosts, &
             q_lo = locate(r - dr_source, z_padded(1:, i, j), q_source)
             q_mid = locate(r - dr_source / 2., z_padded(1:, i, j), q_source)
 
+            total = 0.
             do dir = 1, 4
                 do n = 1, n_per_dir
                     s = (dir - 1) * n_per_dir + n
+                    proceed = .true.
 
                     if (.not. is_stochastic) then
                         if (ghosts(s, i, j) > 0) then
+
                             associate(ray => rays(ghosts(s, i, j), i, j))
                                 if ((ray%r - ray%dr / 2.) < r) then
-                                    source(s, i, j)%meta = -1
-                                    cycle
+                                    launches(s, i, j)%meta = -1
+                                    proceed = .false.
                                 end if
                             end associate
+
                         end if
                     end if
 
                     cp = cp_source(n)
+                    u = u_bar(q_source, i, j)
+                    v = v_bar(q_source, i, j)
+                    mag_cp_hat = cp - cos_phi(dir) * u - sin_phi(dir) * v
+
                     if (extrinsic(j)) then
-                        u = u_bar(q_source, i, j)
-                        v = v_bar(q_source, i, j)
-                        cp = cp - cos_phi(dir) * u - sin_phi(dir) * v
+                        flux = exp(-0.5 * ((cp / cp_width) ** 2))
+                    else
+                        flux = exp(-0.5 * ((mag_cp_hat / cp_width) ** 2))
                     end if
 
-                    wvn_hor = omega_hat_source / cp
-                    k = wvn_hor * cos_phi(dir)
-                    l = wvn_hor * sin_phi(dir)
+                    total = total + flux
+
+                    if (.not. proceed) then
+                        cycle
+                    end if
+
+                    mag_wvn_hor = omega_hat_source / mag_cp_hat
+                    k = mag_wvn_hor * cos_phi(dir)
+                    l = mag_wvn_hor * sin_phi(dir)
 
                     m = get_m(k, l, coriolis_sq(j))
                     cg = get_cg_r(k, l, m, coriolis_sq(j))
 
-                    proceed = .true.
                     if (is_stochastic) then
                         proceed = rand(s, i, j) < epsilon * cg * dt / dr_source
                     end if
                         
                     if (proceed) then
-                        source(s, i, j)%r = r - dr_source / 2.
-                        source(s, i, j)%dr = dr_source
+                        launches(s, i, j)%r = r - dr_source / 2.
+                        launches(s, i, j)%dr = dr_source
 
-                        source(s, i, j)%k = k
-                        source(s, i, j)%l = l
-                        source(s, i, j)%m = m
+                        launches(s, i, j)%k = k
+                        launches(s, i, j)%l = l
+                        launches(s, i, j)%m = m
 
-                        source(s, i, j)%dm  = get_dm(m)
-                        source(s, i, j)%dens = flux_source(n) / abs( &
-                            wvn_hor * source(s, i, j)%dm * cg &
+                        launches(s, i, j)%dm  = get_dm(m)
+                        launches(s, i, j)%dens = flux / abs( &
+                            mag_wvn_hor * launches(s, i, j)%dm * cg &
                         )
 
-                        source(s, i, j)%age = 0
-                        source(s, i, j)%meta = last_meta(i, j)
+                        launches(s, i, j)%age = 0
+                        launches(s, i, j)%meta = last_meta(i, j)
                         last_meta(i, j) = last_meta(i, j) + 1
                         n_added(i, j) = n_added(i, j) + 1
 
-                        source(s, i, j)%q_mid = q_mid
-                        source(s, i, j)%q_hi = q_hi
-                        source(s, i, j)%q_lo = q_lo
+                        launches(s, i, j)%q_mid = q_mid
+                        launches(s, i, j)%q_hi = q_hi
+                        launches(s, i, j)%q_lo = q_lo
 
-                        source(s, i, j)%is_ghost = .not. is_stochastic
+                        launches(s, i, j)%is_ghost = .not. is_stochastic
                     else
-                        source(s, i, j)%meta = -1
+                        launches(s, i, j)%meta = -1
                     end if
                 end do
             end do
+
+            launches(:, i, j)%dens = launches(:, i, j)%dens &
+                * 2 * boundary_flux / total
+
         end do
     end do
 
-end subroutine update_source
+end subroutine get_launches
 
 ! ==============================================================================
 ! ray volume sink subroutines
