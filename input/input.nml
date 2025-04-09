@@ -123,8 +123,7 @@
     source_pressure    = 300.e+2,
     T_hat_source       = 36000.,
     use_shapiro_filter = .true.,
-    H_rho              = 8.e+3,
-    N0                 = 0.015 /
+    H_rho              = 8.e+3 /
 
  &ad99_nml
      Bt_0  = 0.0043,  

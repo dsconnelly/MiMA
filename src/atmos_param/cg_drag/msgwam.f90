@@ -5,7 +5,7 @@ module msgwam_mod
 ! implemented in dsconnelly/python-msgwam on GitHub.
 ! ==============================================================================
 
-use constants_mod,    only: constants_init, PI, RDGAS
+use constants_mod,    only: constants_init, CP_AIR, GRAV, PI, RDGAS
 use diag_manager_mod, only: diag_manager_init, register_diag_field, send_data
 use fms_mod,          only: check_nml_error, CLOCK_ROUTINE, close_file, &
                             error_mesg, FATAL, file_exist, fms_init, &
@@ -40,6 +40,7 @@ real :: epsilon = 0.
 real :: lat_extrinsic = 15.
 integer :: max_age = 10 * 86400
 real :: min_flux = 1.e-8
+real :: min_N2 = 0.005 ** 2
 real :: mu = 1.e-3
 integer :: n_max = 2500
 integer :: n_source = 48
@@ -50,12 +51,11 @@ logical :: use_shapiro_filter = .true.
 ! The scheme should eventually be rewritten to calculate these values from the
 ! mean flow, but for now the ray tracer treats them as constants. 
 real :: H_rho = 8.e+3
-real :: N0 = 0.015
 
 namelist / msgwam_nml / &
     boundary_flux, break_waves, cp_center, cp_max, cp_width, dr_source, & 
-    epsilon, lat_extrinsic, max_age, min_flux, mu, n_max, n_source, &
-    source_pressure, T_hat_source, use_shapiro_filter, H_rho, N0
+    epsilon, lat_extrinsic, max_age, min_flux, min_N2, mu, n_max, n_source, &
+    source_pressure, T_hat_source, use_shapiro_filter, H_rho
 
 ! ==============================================================================
 ! derived type definitions
@@ -93,7 +93,7 @@ real :: hgamma_sq
 integer :: i_max, j_max, q_max, q_source
 real, dimension(:), allocatable :: coriolis_sq
 logical, dimension(:), allocatable :: extrinsic
-real, dimension(:, :, :), allocatable :: z_faces, u_bar, v_bar, rho
+real, dimension(:, :, :), allocatable :: z_faces, u_bar, v_bar, rho, N2
 real, dimension(:, :, :), allocatable :: z_padded
 
 ! ==============================================================================
@@ -208,6 +208,7 @@ subroutine msgwam_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(u_bar(q_max, i_max, j_max))
     allocate(v_bar(q_max, i_max, j_max))
     allocate(rho(q_max, i_max, j_max))
+    allocate(N2(q_max, i_max, j_max))
 
     allocate(flux_x(q_max + 1, i_max, j_max))
     allocate(flux_y(q_max + 1, i_max, j_max))
@@ -270,30 +271,30 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     call mpp_clock_begin(clocks(1))
 
     call update_mean_state(z_full, p_full, temp, uuu, vvv, &
-        z_padded, z_faces, u_bar, v_bar, rho)
+        z_padded, z_faces, u_bar, v_bar, rho, N2)
 
     call mpp_clock_end(clocks(1))
     call mpp_clock_begin(clocks(2))
 
-    call take_RK3_step(z_padded, u_bar, v_bar, dt / 2., rays, increments)
+    call take_RK3_step(z_padded, u_bar, v_bar, N2, dt / 2., rays, increments)
 
     call mpp_clock_end(clocks(2))
     call mpp_clock_begin(clocks(3))
 
     call apply_dissipation(z_padded, rho, dt / 2., rays)
-    call apply_breaking(z_faces, rho, rays)
+    call apply_breaking(z_faces, rho, N2, rays)
 
     call mpp_clock_end(clocks(3))
     call mpp_clock_begin(clocks(4))
 
-    call check_boundaries(z_padded, rays)
-    call check_source(z_padded, u_bar, v_bar, dt / 2., rays, ghosts, &
+    call check_boundaries(z_padded, N2, rays)
+    call check_source(z_padded, u_bar, v_bar, N2, dt / 2., rays, ghosts, &
         last_meta, launches)
 
     call mpp_clock_end(clocks(4))
     call mpp_clock_begin(clocks(5))
 
-    call update_fluxes(z_padded, rays, flux_x, flux_y)
+    call update_fluxes(z_padded, N2, rays, flux_x, flux_y)
     call get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
     call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
 
@@ -312,27 +313,27 @@ end subroutine msgwam_end
 ! dispersion relation subroutines
 ! ==============================================================================
 
-pure function cg_r_from_ray(ray, f2) result(cg_r)
+pure function cg_r_from_ray(ray, N2, f2) result(cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
     type(t_ray), intent(in) :: ray
-    real,        intent(in) :: f2
+    real,        intent(in) :: N2, f2
     real                    :: cg_r
 
     ! --------------------------------------------------------------------------
 
-    cg_r = cg_r_from_reals(ray%k, ray%l, ray%m, f2)
+    cg_r = cg_r_from_reals(ray%k, ray%l, ray%m, N2, f2)
 
 end function cg_r_from_ray
 
-pure function cg_r_from_reals(k, l, m, f2) result(cg_r)
+pure function cg_r_from_reals(k, l, m, N2, f2) result(cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, m, f2
+    real, intent(in) :: k, l, m, N2, f2
     real             :: cg_r
 
     ! --------------------------------------------------------------------------
@@ -343,32 +344,32 @@ pure function cg_r_from_reals(k, l, m, f2) result(cg_r)
     ! --------------------------------------------------------------------------
 
     wvn_sq = k ** 2 + l ** 2 + m ** 2 + hgamma_sq
-    omega_hat = get_omega_hat(k, l, m, f2)
+    omega_hat = get_omega_hat(k, l, m, N2, f2)
 
     cg_r = -m * (omega_hat ** 2 - f2) / (omega_hat * wvn_sq)
 
 end function cg_r_from_reals
 
-pure function get_dm(m) result(dm)
+pure function get_dm(m, N2) result(dm)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: m
+    real, intent(in) :: m, N2
     real             :: dm
 
     ! --------------------------------------------------------------------------
 
-    dm = dc_source * (m ** 2) / N0
+    dm = dc_source * (m ** 2) / sqrt(N2)
 
 end function get_dm
 
-pure function get_m(k, l, f2) result(m)
+pure function get_m(k, l, N2, f2) result(m)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, f2
+    real, intent(in) :: k, l, N2, f2
     real             :: m
 
     ! --------------------------------------------------------------------------
@@ -380,33 +381,33 @@ pure function get_m(k, l, f2) result(m)
 
     omega_hat_sq = omega_hat_source ** 2
     m = -sqrt(&
-        (k ** 2 + l ** 2) * (N0 ** 2 - omega_hat_sq) / &
+        (k ** 2 + l ** 2) * (N2 - omega_hat_sq) / &
         (omega_hat_sq - f2) &
     )
 
 end function get_m
 
-pure function omega_hat_from_ray(ray, f2) result(omega_hat)
+pure function omega_hat_from_ray(ray, N2, f2) result(omega_hat)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
     type(t_ray), intent(in) :: ray
-    real,        intent(in) :: f2
+    real,        intent(in) :: N2, f2
     real                    :: omega_hat
 
     ! --------------------------------------------------------------------------
 
-    omega_hat = omega_hat_from_reals(ray%k, ray%l, ray%m, f2)
+    omega_hat = omega_hat_from_reals(ray%k, ray%l, ray%m, N2, f2)
 
 end function omega_hat_from_ray
 
-pure function omega_hat_from_reals(k, l, m, f2) result(omega_hat)
+pure function omega_hat_from_reals(k, l, m, N2, f2) result(omega_hat)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, m, f2
+    real, intent(in) :: k, l, m, N2, f2
     real             :: omega_hat
 
     ! --------------------------------------------------------------------------
@@ -420,7 +421,7 @@ pure function omega_hat_from_reals(k, l, m, f2) result(omega_hat)
     m2 = m ** 2 + hgamma_sq
 
     omega_hat = sqrt( &
-        (N0 ** 2 * wvn_hor_sq + f2 * m2) / &
+        (N2 * wvn_hor_sq + f2 * m2) / &
         (wvn_hor_sq + m2) &
     )
 
@@ -491,12 +492,13 @@ pure subroutine get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine
 
-pure subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
+pure subroutine update_fluxes(z_padded, N2, rays, flux_x, flux_y)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:, :, :),       intent(in)  :: z_padded
+    real, dimension(:, :, :),        intent(in)  :: N2
     type(t_ray), dimension(:, :, :), intent(in)  :: rays
     real, dimension(:, :, :),        intent(out) :: flux_x, flux_y
 
@@ -523,7 +525,7 @@ pure subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
                     r_lo = ray%r - ray%dr / 2.
                     r_hi = ray%r + ray%dr / 2.
 
-                    cg = get_cg_r(ray, coriolis_sq(j))
+                    cg = get_cg_r(ray, N2(ray%q_mid, i, j), coriolis_sq(j))
                     f_x = ray%k * ray%dens * ray%dm * cg
                     f_y = ray%l * ray%dens * ray%dm * cg
 
@@ -551,19 +553,20 @@ pure subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
 end subroutine update_fluxes
 
 pure subroutine update_mean_state(z_full, p_full, temp, uuu, vvv, &
-    z_padded, z_faces, u_bar, v_bar, rho)
+    z_padded, z_faces, u_bar, v_bar, rho, N2)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(:, :, :),  intent(in)  :: z_full, p_full, temp, uuu, vvv
     real, dimension(0:, :, :), intent(out) :: z_padded
-    real, dimension(:, :, :),  intent(out) :: z_faces, u_bar, v_bar, rho
+    real, dimension(:, :, :),  intent(out) :: z_faces, u_bar, v_bar, rho, N2
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, j, q
+    integer :: i, j, q, q_hi, q_lo
+    real :: dTdz
 
     ! --------------------------------------------------------------------------
 
@@ -574,6 +577,17 @@ pure subroutine update_mean_state(z_full, p_full, temp, uuu, vvv, &
                 v_bar(q, i, j) = vvv(i, j, q)
                 rho(q, i, j) = p_full(i, j, q) / RDGAS / temp(i, j, q)
                 z_padded(q, i, j) = z_full(i, j, q)
+
+                q_hi = max(1, q - 1)
+                q_lo = min(q_max, q + 1)
+                dTdz = &
+                    (temp(i, j, q_hi) - temp(i, j, q_lo)) / &
+                    (z_full(i, j, q_hi) - z_full(i, j, q_lo))
+
+                N2(q, i, j) = max( &
+                    (GRAV / temp(i, j, q)) * (dTdz + GRAV / CP_AIR), &
+                    min_N2 &
+                )
             end do
         end do
     end do
@@ -747,14 +761,14 @@ end function locate
 ! ray volume source subroutines
 ! ==============================================================================
 
-subroutine check_source(z_padded, u_bar, v_bar, dt, &
+subroutine check_source(z_padded, u_bar, v_bar, N2, dt, &
     rays, ghosts, last_meta, launches)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:, :, :),       intent(in)    :: z_padded
-    real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar
+    real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar, N2
     real,                            intent(in)    :: dt
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
     integer, dimension(:, :, :),     intent(inout) :: ghosts
@@ -781,11 +795,11 @@ subroutine check_source(z_padded, u_bar, v_bar, dt, &
         end do
     end do
 
-    call get_launches(z_padded, u_bar, v_bar, dt, rays, ghosts, &
+    call get_launches(z_padded, u_bar, v_bar, N2, dt, rays, ghosts, &
         last_meta, launches, n_excess)
 
     n_excess = max(n_excess - n_max, 0)
-    call prune(n_excess, rays)
+    call prune(n_excess, N2, rays)
 
     do j = 1, j_max
         do i = 1, i_max
@@ -844,12 +858,13 @@ subroutine init_source
 
 end subroutine init_source
 
-pure subroutine find_lowest_energies(n_find, rays, idx)
+pure subroutine find_lowest_energies(n_find, N2, rays, idx)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     integer, dimension(:, :),        intent(in)  :: n_find
+    real, dimension(:, :, :),        intent(in)  :: N2
     type(t_ray), dimension(:, :, :), intent(in)  :: rays
     integer, dimension(:, :, :),     intent(out) :: idx
 
@@ -872,7 +887,9 @@ pure subroutine find_lowest_energies(n_find, rays, idx)
                         cycle
                     end if
 
-                    omega_hat = get_omega_hat(ray, coriolis_sq(j))
+                    omega_hat = get_omega_hat( &
+                        ray, N2(ray%q_mid, i, j), coriolis_sq(j) &
+                    )
                     energy = ray%dens * ray%dm * omega_hat
                 end associate
 
@@ -902,12 +919,13 @@ pure subroutine find_lowest_energies(n_find, rays, idx)
 
 end subroutine find_lowest_energies
 
-pure subroutine prune(n_excess, rays)
+pure subroutine prune(n_excess, N2, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     integer, dimension(:, :),        intent(in)    :: n_excess
+    real, dimension(:, :, :),        intent(in)    :: N2
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
@@ -919,7 +937,7 @@ pure subroutine prune(n_excess, rays)
     ! --------------------------------------------------------------------------
 
     allocate(idx(maxval(n_excess), i_max, j_max))
-    call find_lowest_energies(n_excess, rays, idx)
+    call find_lowest_energies(n_excess, N2, rays, idx)
 
     do j = 1, j_max
         do i = 1, i_max
@@ -931,14 +949,14 @@ pure subroutine prune(n_excess, rays)
 
 end subroutine prune
 
-subroutine get_launches(z_padded, u_bar, v_bar, dt, rays, ghosts, &
+subroutine get_launches(z_padded, u_bar, v_bar, N2, dt, rays, ghosts, &
     last_meta, launches, n_added)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:, :, :),       intent(in)    :: z_padded
-    real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar
+    real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar, N2
     real,                            intent(in)    :: dt
     type(t_ray), dimension(:, :, :), intent(in)    :: rays
     integer, dimension(:, :, :),     intent(in)    :: ghosts
@@ -1006,8 +1024,8 @@ subroutine get_launches(z_padded, u_bar, v_bar, dt, rays, ghosts, &
                     k = mag_wvn_hor * cos_phi(dir)
                     l = mag_wvn_hor * sin_phi(dir)
 
-                    m = get_m(k, l, coriolis_sq(j))
-                    cg = get_cg_r(k, l, m, coriolis_sq(j))
+                    m = get_m(k, l, N2(q_source, i, j), coriolis_sq(j))
+                    cg = get_cg_r(k, l, m, N2(q_source, i, j), coriolis_sq(j))
 
                     if (is_stochastic) then
                         proceed = rand(s, i, j) < epsilon * cg * dt / dr_source
@@ -1021,7 +1039,7 @@ subroutine get_launches(z_padded, u_bar, v_bar, dt, rays, ghosts, &
                         launches(s, i, j)%l = l
                         launches(s, i, j)%m = m
 
-                        launches(s, i, j)%dm  = get_dm(m)
+                        launches(s, i, j)%dm  = get_dm(m, N2(q_source, i, j))
                         launches(s, i, j)%dens = flux / abs( &
                             mag_wvn_hor * launches(s, i, j)%dm * cg &
                         )
@@ -1054,12 +1072,12 @@ end subroutine get_launches
 ! ray volume sink subroutines
 ! ==============================================================================
 
-pure subroutine apply_breaking(z_faces, rho, rays)
+pure subroutine apply_breaking(z_faces, rho, N2, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :),        intent(in)    :: z_faces, rho
+    real, dimension(:, :, :),        intent(in)    :: z_faces, rho, N2
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
@@ -1076,7 +1094,7 @@ pure subroutine apply_breaking(z_faces, rho, rays)
         return
     end if
 
-    num = -0.5 * rho * N0 ** 2
+    num = -0.5 * rho * N2
     den = 0.
 
     do j = 1, j_max
@@ -1088,7 +1106,10 @@ pure subroutine apply_breaking(z_faces, rho, rays)
                 end if
 
                 associate (ray => rays(n, i, j))
-                    omega_hat = get_omega_hat(ray, coriolis_sq(j))
+                    omega_hat = get_omega_hat( &
+                        ray, N2(ray%q_mid, i, j), coriolis_sq(j) &
+                    )
+
                     wvn_sq(n, i, j) = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
                     S = ray%m ** 2 * omega_hat * ray%dens * ray%dm
 
@@ -1204,7 +1225,9 @@ pure subroutine apply_dissipation(z_padded, rho, dt, rays)
                     )
 
                     wvn_sq = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
-                    omega_hat = get_omega_hat(ray, coriolis_sq(j))
+                    omega_hat = get_omega_hat( &
+                        ray, N2(ray%q_mid, i, j), coriolis_sq(j) &
+                    )
 
                     damping = nu * wvn_sq * ( &
                         1 + coriolis_sq(j) / omega_hat ** 2 &
@@ -1219,12 +1242,13 @@ pure subroutine apply_dissipation(z_padded, rho, dt, rays)
 
 end subroutine apply_dissipation
 
- subroutine check_boundaries(z_padded, rays)
+ subroutine check_boundaries(z_padded, N2, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:, :, :),       intent(in)    :: z_padded
+    real, dimension(:, :, :),        intent(in)    :: N2
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
@@ -1247,7 +1271,7 @@ end subroutine apply_dissipation
                         cycle
                     end if
 
-                    cg = get_cg_r(ray, coriolis_sq(j))
+                    cg = get_cg_r(ray, N2(ray%q_mid, i, j), coriolis_sq(j))
                     wvn = sqrt(ray%k ** 2 + ray%l ** 2)
                     flux = wvn * ray%dens * ray%dm * cg
 
@@ -1271,13 +1295,13 @@ end subroutine check_boundaries
 ! time stepping subroutines
 ! ==============================================================================
 
-pure subroutine take_RK3_step(z_padded, u_bar, v_bar, dt, rays, increments)
+pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:, :, :),       intent(in)    :: z_padded
-    real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar
+    real, dimension(:, :, :),        intent(in)    :: u_bar, v_bar, N2
     real,                            intent(in)    :: dt
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
     type(t_inc), dimension(:, :, :), intent(out)   :: increments
@@ -1318,7 +1342,10 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, dt, rays, increments)
                         z => z_padded(1:, i, j) &
                     )
 
-                        dr_dt = get_cg_r(ray, coriolis_sq(j))
+                        dr_dt = get_cg_r( &
+                            ray, N2(ray%q_mid, i, j), coriolis_sq(j) &
+                        )
+
                         dm_dt = -( &
                             du_dr(ray%q_mid, i, j) * ray%k + &
                             dv_dr(ray%q_mid, i, j) * ray%l &
