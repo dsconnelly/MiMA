@@ -68,6 +68,7 @@ namelist / msgwam_nml / &
 type :: t_ray
     real :: r, dr, k, l, m, dm, dens
     integer :: age, meta, q_lo, q_mid, q_hi
+    real :: N2_lo, N2_mid, N2_hi
     logical :: is_ghost
 end type t_ray
 
@@ -287,14 +288,14 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     call mpp_clock_end(clocks(3))
     call mpp_clock_begin(clocks(4))
 
-    call check_boundaries(z_padded, N2, rays)
+    call check_boundaries(z_padded, rays)
     call check_source(z_padded, u_bar, v_bar, N2, dt / 2., rays, ghosts, &
         last_meta, launches)
 
     call mpp_clock_end(clocks(4))
     call mpp_clock_begin(clocks(5))
 
-    call update_fluxes(z_padded, N2, rays, flux_x, flux_y)
+    call update_fluxes(z_padded, rays, flux_x, flux_y)
     call get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
     call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
 
@@ -492,13 +493,12 @@ pure subroutine get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine
 
-pure subroutine update_fluxes(z_padded, N2, rays, flux_x, flux_y)
+pure subroutine update_fluxes(z_padded, rays, flux_x, flux_y)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:, :, :),       intent(in)  :: z_padded
-    real, dimension(:, :, :),        intent(in)  :: N2
     type(t_ray), dimension(:, :, :), intent(in)  :: rays
     real, dimension(:, :, :),        intent(out) :: flux_x, flux_y
 
@@ -525,7 +525,7 @@ pure subroutine update_fluxes(z_padded, N2, rays, flux_x, flux_y)
                     r_lo = ray%r - ray%dr / 2.
                     r_hi = ray%r + ray%dr / 2.
 
-                    cg = get_cg_r(ray, N2(ray%q_mid, i, j), coriolis_sq(j))
+                    cg = get_cg_r(ray, ray%N2_mid, coriolis_sq(j))
                     f_x = ray%k * ray%dens * ray%dm * cg
                     f_y = ray%l * ray%dens * ray%dm * cg
 
@@ -676,6 +676,10 @@ pure subroutine delete_ray(n, i, j, rays)
         ray%q_mid = -1
         ray%q_hi = -1
 
+        ray%N2_lo = 0.
+        ray%N2_mid = 0.
+        ray%N2_hi = 0.
+
         ray%is_ghost = .false.
     end associate
 
@@ -757,6 +761,34 @@ pure function locate(r, z, q_guess) result(q)
 
 end function locate
 
+ function interp(z, profile, r, q) result(v)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(:), intent(in) :: z, profile
+    real,               intent(in) :: r
+    integer,            intent(in) :: q
+    real                           :: v
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    real :: dz
+
+    ! --------------------------------------------------------------------------
+
+    if (r > z(1)) then
+        v = profile(1)
+    else if (r < z(q_max)) then
+        v = profile(q_max)
+    else
+        dz = z(q) - z(q + 1)
+        v = profile(q + 1) * (z(q) - r) / dz + profile(q) * (r - z(q + 1)) / dz
+    end if
+
+end function interp
+
 ! ==============================================================================
 ! ray volume source subroutines
 ! ==============================================================================
@@ -799,7 +831,7 @@ subroutine check_source(z_padded, u_bar, v_bar, N2, dt, &
         last_meta, launches, n_excess)
 
     n_excess = max(n_excess - n_max, 0)
-    call prune(n_excess, N2, rays)
+    call prune(n_excess, rays)
 
     do j = 1, j_max
         do i = 1, i_max
@@ -858,13 +890,12 @@ subroutine init_source
 
 end subroutine init_source
 
-pure subroutine find_lowest_energies(n_find, N2, rays, idx)
+pure subroutine find_lowest_energies(n_find, rays, idx)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     integer, dimension(:, :),        intent(in)  :: n_find
-    real, dimension(:, :, :),        intent(in)  :: N2
     type(t_ray), dimension(:, :, :), intent(in)  :: rays
     integer, dimension(:, :, :),     intent(out) :: idx
 
@@ -887,9 +918,7 @@ pure subroutine find_lowest_energies(n_find, N2, rays, idx)
                         cycle
                     end if
 
-                    omega_hat = get_omega_hat( &
-                        ray, N2(ray%q_mid, i, j), coriolis_sq(j) &
-                    )
+                    omega_hat = get_omega_hat(ray, ray%N2_mid, coriolis_sq(j))
                     energy = ray%dens * ray%dm * omega_hat
                 end associate
 
@@ -919,13 +948,12 @@ pure subroutine find_lowest_energies(n_find, N2, rays, idx)
 
 end subroutine find_lowest_energies
 
-pure subroutine prune(n_excess, N2, rays)
+pure subroutine prune(n_excess, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     integer, dimension(:, :),        intent(in)    :: n_excess
-    real, dimension(:, :, :),        intent(in)    :: N2
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
@@ -937,7 +965,7 @@ pure subroutine prune(n_excess, N2, rays)
     ! --------------------------------------------------------------------------
 
     allocate(idx(maxval(n_excess), i_max, j_max))
-    call find_lowest_energies(n_excess, N2, rays, idx)
+    call find_lowest_energies(n_excess, rays, idx)
 
     do j = 1, j_max
         do i = 1, i_max
@@ -969,7 +997,8 @@ subroutine get_launches(z_padded, u_bar, v_bar, N2, dt, rays, ghosts, &
     ! --------------------------------------------------------------------------
     logical :: proceed
     integer :: dir, i, j, n, s, q_hi, q_mid, q_lo
-    real :: cg, cp, flux, k, l, m, mag_cp_hat, mag_wvn_hor, r, total, u, v
+    real :: cg, cp, flux, k, l, m, mag_cp_hat, mag_wvn_hor, N2_source, r, &
+        total, u, v
     real, dimension(size(launches, 1), size(launches, 2), size(launches, 3)) &
         :: rand
 
@@ -980,6 +1009,8 @@ subroutine get_launches(z_padded, u_bar, v_bar, N2, dt, rays, ghosts, &
     do j = 1, j_max
         do i = 1, i_max
             r = z_padded(q_source, i, j)
+            N2_source = N2(q_source, i, j)
+
             q_hi = locate(r, z_padded(1:, i, j), q_source)
             q_lo = locate(r - dr_source, z_padded(1:, i, j), q_source)
             q_mid = locate(r - dr_source / 2., z_padded(1:, i, j), q_source)
@@ -1024,8 +1055,8 @@ subroutine get_launches(z_padded, u_bar, v_bar, N2, dt, rays, ghosts, &
                     k = mag_wvn_hor * cos_phi(dir)
                     l = mag_wvn_hor * sin_phi(dir)
 
-                    m = get_m(k, l, N2(q_source, i, j), coriolis_sq(j))
-                    cg = get_cg_r(k, l, m, N2(q_source, i, j), coriolis_sq(j))
+                    m = get_m(k, l, N2_source, coriolis_sq(j))
+                    cg = get_cg_r(k, l, m, N2_source, coriolis_sq(j))
 
                     if (is_stochastic) then
                         proceed = rand(s, i, j) < epsilon * cg * dt / dr_source
@@ -1039,7 +1070,7 @@ subroutine get_launches(z_padded, u_bar, v_bar, N2, dt, rays, ghosts, &
                         launches(s, i, j)%l = l
                         launches(s, i, j)%m = m
 
-                        launches(s, i, j)%dm  = get_dm(m, N2(q_source, i, j))
+                        launches(s, i, j)%dm  = get_dm(m, N2_source)
                         launches(s, i, j)%dens = flux / abs( &
                             mag_wvn_hor * launches(s, i, j)%dm * cg &
                         )
@@ -1052,6 +1083,10 @@ subroutine get_launches(z_padded, u_bar, v_bar, N2, dt, rays, ghosts, &
                         launches(s, i, j)%q_mid = q_mid
                         launches(s, i, j)%q_hi = q_hi
                         launches(s, i, j)%q_lo = q_lo
+
+                        launches(s, i, j)%N2_lo = N2_source
+                        launches(s, i, j)%N2_mid = N2_source
+                        launches(s, i, j)%N2_hi = N2_source
 
                         launches(s, i, j)%is_ghost = .not. is_stochastic
                     else
@@ -1106,10 +1141,7 @@ pure subroutine apply_breaking(z_faces, rho, N2, rays)
                 end if
 
                 associate (ray => rays(n, i, j))
-                    omega_hat = get_omega_hat( &
-                        ray, N2(ray%q_mid, i, j), coriolis_sq(j) &
-                    )
-
+                    omega_hat = get_omega_hat(ray, ray%N2_mid, coriolis_sq(j))
                     wvn_sq(n, i, j) = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
                     S = ray%m ** 2 * omega_hat * ray%dens * ray%dm
 
@@ -1225,9 +1257,7 @@ pure subroutine apply_dissipation(z_padded, rho, dt, rays)
                     )
 
                     wvn_sq = ray%k ** 2 + ray%l ** 2 + ray%m ** 2
-                    omega_hat = get_omega_hat( &
-                        ray, N2(ray%q_mid, i, j), coriolis_sq(j) &
-                    )
+                    omega_hat = get_omega_hat(ray, ray%N2_mid, coriolis_sq(j))
 
                     damping = nu * wvn_sq * ( &
                         1 + coriolis_sq(j) / omega_hat ** 2 &
@@ -1242,13 +1272,12 @@ pure subroutine apply_dissipation(z_padded, rho, dt, rays)
 
 end subroutine apply_dissipation
 
- subroutine check_boundaries(z_padded, N2, rays)
+pure subroutine check_boundaries(z_padded, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:, :, :),       intent(in)    :: z_padded
-    real, dimension(:, :, :),        intent(in)    :: N2
     type(t_ray), dimension(:, :, :), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
@@ -1271,7 +1300,7 @@ end subroutine apply_dissipation
                         cycle
                     end if
 
-                    cg = get_cg_r(ray, N2(ray%q_mid, i, j), coriolis_sq(j))
+                    cg = get_cg_r(ray, ray%N2_mid, coriolis_sq(j))
                     wvn = sqrt(ray%k ** 2 + ray%l ** 2)
                     flux = wvn * ray%dens * ray%dm * cg
 
@@ -1295,7 +1324,7 @@ end subroutine check_boundaries
 ! time stepping subroutines
 ! ==============================================================================
 
-pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
+ subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -1310,9 +1339,10 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
     ! local variables
     ! --------------------------------------------------------------------------
     integer i, j, n, q, stage
-    real :: cg_hi, cg_lo, ddr_dt, dm_dt, dr_dt, dz
+    real :: cg_hi, cg_lo, ddr_dt, dm_dt, dr_dt, dz, omega_hat, r_lo, r_hi, &
+        wvn_hor_sq, wvn_ver_sq
     real, dimension(size(u_bar, 1) - 1, size(u_bar, 2), size(u_bar, 3)) :: &
-        du_dr, dv_dr
+        du_dr, dv_dr, dN2_dr
     real, dimension(size(rays, 1), size(rays, 2), size(rays, 3)) :: area
 
     ! --------------------------------------------------------------------------
@@ -1323,6 +1353,7 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
                 dz = z_padded(q, i, j) - z_padded(q + 1, i, j)
                 du_dr(q, i, j) = (u_bar(q, i, j) - u_bar(q + 1, i, j)) / dz
                 dv_dr(q, i, j) = (v_bar(q, i, j) - v_bar(q + 1, i, j)) / dz
+                dN2_dr(q, i, j) = (N2(q, i, j) - N2(q + 1, i, j)) / dz
             end do
         end do
     end do
@@ -1342,41 +1373,58 @@ pure subroutine take_RK3_step(z_padded, u_bar, v_bar, N2, dt, rays, increments)
                     associate( &
                         ray => rays(n, i, j), &
                         inc => increments(n, i, j), &
-                        z => z_padded(1:, i, j) &
+                        z => z_padded(1:q_max, i, j), &
+                        N2_col => N2(:, i, j) &
                     )
 
-                        cg_hi = get_cg_r( &
-                            ray, N2(ray%q_hi, i, j), coriolis_sq(j) &
-                        )
-
-                        cg_lo = get_cg_r( &
-                            ray, N2(ray%q_lo, i, j), coriolis_sq(j) &
-                        )
-
+                        cg_hi = get_cg_r(ray, ray%N2_hi, coriolis_sq(j))
+                        cg_lo = get_cg_r(ray, ray%N2_lo, coriolis_sq(j))
                         dr_dt = (cg_hi + cg_lo) / 2
-                        ddr_dt = cg_hi - cg_lo
-
-                        dm_dt = -( &
-                            du_dr(ray%q_mid, i, j) * ray%k + &
-                            dv_dr(ray%q_mid, i, j) * ray%l &
-                        )
 
                         inc%r = As(stage) * inc%r + dt * dr_dt
                         ray%r = ray%r + Bs(stage) * inc%r
 
                         if (.not. ray%is_ghost) then
+
+                            wvn_hor_sq = ray%k ** 2 + ray%l ** 2
+                            wvn_ver_sq = ray%m ** 2 + hgamma_sq
+
+                            omega_hat = get_omega_hat( &
+                                ray, ray%N2_mid, coriolis_sq(j) &
+                            )
+
+                            dm_dt = -( &
+                                du_dr(ray%q_mid, i, j) * ray%k + &
+                                dv_dr(ray%q_mid, i, j) * ray%l &
+                            )
+
+                            dm_dt = dm_dt - ( &
+                                (wvn_hor_sq * dN2_dr(ray%q_mid, i, j)) / &
+                                2 * omega_hat * (wvn_hor_sq + wvn_ver_sq) &
+                            )
+
+                            ddr_dt = cg_hi - cg_lo
                             inc%dr = As(stage) * inc%dr + dt * ddr_dt
                             ray%dr = ray%dr + Bs(stage) * inc%dr
 
                             inc%m = As(stage) * inc%m + dt * dm_dt
                             ray%m = ray%m + Bs(stage) * inc%m
+
                         end if
 
+                        r_lo = ray%r - ray%dr / 2.
+                        r_hi = ray%r + ray%dr / 2.
+
                         ray%q_mid = locate(ray%r, z, ray%q_mid)
-                        ray%q_hi = locate(ray%r + ray%dr / 2., z, ray%q_hi)
-                        ray%q_lo = locate(ray%r - ray%dr / 2., z, ray%q_lo)
+                        ray%q_hi = locate(r_hi, z, ray%q_hi)
+                        ray%q_lo = locate(r_lo, z, ray%q_lo)
+
+                        ray%N2_hi = interp(z, N2_col, r_hi, ray%q_hi)
+                        ray%N2_lo = interp(z, N2_col, r_lo, ray%q_lo)
+                        ray%N2_mid = interp(z, N2_col, ray%r, ray%q_mid)
 
                         if (stage == 3) then
+                            ray%dr = abs(ray%dr)
                             ray%dm = area(n, i, j) / ray%dr
                             ray%age = ray%age + dt
                         end if
