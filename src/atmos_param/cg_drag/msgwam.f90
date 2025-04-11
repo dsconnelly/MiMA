@@ -36,6 +36,7 @@ real :: cp_center = 0.
 real :: cp_max = 50.
 real :: cp_width = 10.
 real :: dr_source = 1000.
+real :: dt_rays = 120.
 real :: epsilon = 0.
 real :: lat_extrinsic = 15.
 integer :: max_age = 10 * 86400
@@ -53,9 +54,9 @@ logical :: use_shapiro_filter = .true.
 real :: H_rho = 8.e+3
 
 namelist / msgwam_nml / &
-    boundary_flux, break_waves, cp_center, cp_max, cp_width, dr_source, & 
-    epsilon, lat_extrinsic, max_age, min_flux, min_N2, mu, n_max, n_source, &
-    source_pressure, T_hat_source, use_shapiro_filter, H_rho
+    boundary_flux, break_waves, cp_center, cp_max, cp_width, dr_source, &
+    dt_rays, epsilon, lat_extrinsic, max_age, min_flux, min_N2, mu, n_max, &
+    n_source, source_pressure, T_hat_source, use_shapiro_filter, H_rho
 
 ! ==============================================================================
 ! derived type definitions
@@ -83,6 +84,7 @@ end type t_inc
 ! module status and timing variables
 ! ==============================================================================
 
+logical :: is_first_step = .true.
 logical :: is_initialized = .false.
 integer, dimension(5) :: clocks
 
@@ -268,6 +270,18 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     real, dimension(:, :, :), intent(out) :: du_dt, dv_dt
 
     ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: n, n_substeps
+
+    ! --------------------------------------------------------------------------
+
+    if (is_first_step) then
+        n_substeps = int(dt / dt_rays)
+        is_first_step = .false.
+    else
+        n_substeps = int(dt / dt_rays / 2)
+    end if
 
     call mpp_clock_begin(clocks(1))
 
@@ -275,24 +289,31 @@ subroutine msgwam_calc(i_start, j_start, lat, &
         z_padded, z_faces, u_bar, v_bar, rho, N2)
 
     call mpp_clock_end(clocks(1))
-    call mpp_clock_begin(clocks(2))
 
-    call take_RK3_step(z_padded, u_bar, v_bar, N2, dt / 2., rays, increments)
+    do n = 1, n_substeps
 
-    call mpp_clock_end(clocks(2))
-    call mpp_clock_begin(clocks(3))
+        call mpp_clock_begin(clocks(2))
 
-    call apply_dissipation(z_padded, rho, dt / 2., rays)
-    call apply_breaking(z_faces, rho, N2, rays)
+        call take_RK3_step(z_padded, u_bar, v_bar, N2, dt_rays, &
+            rays, increments)
 
-    call mpp_clock_end(clocks(3))
-    call mpp_clock_begin(clocks(4))
+        call mpp_clock_end(clocks(2))
+        call mpp_clock_begin(clocks(3))
 
-    call check_boundaries(z_padded, rays)
-    call check_source(z_padded, u_bar, v_bar, N2, dt / 2., rays, ghosts, &
-        last_meta, launches)
+        call apply_dissipation(z_padded, rho, dt_rays, rays)
+        call apply_breaking(z_faces, rho, N2, rays)
 
-    call mpp_clock_end(clocks(4))
+        call mpp_clock_end(clocks(3))
+        call mpp_clock_begin(clocks(4))
+
+        call check_boundaries(z_padded, rays)
+        call check_source(z_padded, u_bar, v_bar, N2, dt_rays, rays, ghosts, &
+            last_meta, launches)
+
+        call mpp_clock_end(clocks(4))
+
+    end do
+
     call mpp_clock_begin(clocks(5))
 
     call update_fluxes(z_padded, rays, flux_x, flux_y)

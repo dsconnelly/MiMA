@@ -1,6 +1,6 @@
 &coupler_nml
    days   = 360,
-   dt_atmos =120,
+   dt_atmos =360,
    current_date = 0001,1,1,0,0,0
    calendar = 'thirty_day' /
 
@@ -107,9 +107,10 @@
 	water_file = 'INPUT/navy_pctwater.data.nc' /
 
  &msgwam_nml
-    boundary_flux      = 0.04,
+    boundary_flux      = 0.005,
     break_waves        = .true.,
     dr_source          = 1500.,
+    dt_rays            = 180.,
     cp_center          = 0.,
     cp_max             = 50.,
     cp_width           = 35.,
