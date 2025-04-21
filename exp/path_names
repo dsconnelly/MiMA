@@ -82,7 +82,15 @@ atmos_param/betts_miller/betts_miller.f90
 atmos_param/betts_miller/bm_massflux.f90
 atmos_param/betts_miller/bm_omp.f90
 atmos_param/cg_drag/ad99.f90
-atmos_param/cg_drag/msgwam.f90
+atmos_param/msgwam/msgwam-constants.f90
+atmos_param/msgwam/msgwam-interface.f90
+atmos_param/msgwam/msgwam-io.f90
+atmos_param/msgwam/msgwam-mean.f90
+atmos_param/msgwam/msgwam-rays.f90
+atmos_param/msgwam/msgwam-rk4.f90
+atmos_param/msgwam/msgwam-sinks.f90
+atmos_param/msgwam/msgwam-source.f90
+atmos_param/msgwam/msgwam-utils.f90
 atmos_param/cloud_generator/null/cloud_generator.f90
 atmos_param/cloud_rad/cloud_rad.f90
 atmos_param/cloud_zonal/null/cloud_zonal.f90

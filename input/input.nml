@@ -109,11 +109,10 @@
  &msgwam_nml
     boundary_flux      = 0.005,
     break_waves        = .true.,
-    dr_source          = 1500.,
-    dt_rays            = 180.,
-    cp_center          = 0.,
     cp_max             = 50.,
     cp_width           = 35.,
+    dr_min             = 50.,
+    dr_source          = 1500.,
     epsilon            = 0.,
     lat_extrinsic      = 20.,
     max_age            = 864000,
