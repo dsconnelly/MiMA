@@ -52,7 +52,6 @@ private :: lat_extrinsic, msgwam_nml
 integer :: i_max, j_max, q_max
 real, dimension(:), allocatable :: f2
 logical, dimension(:), allocatable :: is_extrinsic
-real :: Gamma2
 
 contains
 
@@ -101,8 +100,6 @@ subroutine init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
         f2(j) = (2 * PI * sin(lat) / 86400.) ** 2
     end do
 
-    Gamma2 = ((1. / 2. - 2. / 7.) / H_rho) ** 2
-        
 end subroutine init_msgwam_constants
 
 end module msgwam_constants_mod

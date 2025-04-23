@@ -15,7 +15,8 @@ use msgwam_utils_mod,     only: shapiro_filter
 implicit none
 private
 
-public get_accelerations, project_fluxes, update_mean_state
+public get_accelerations, project_fluxes, update_mean_fields, &
+       update_mean_gradients
 
 contains
 
@@ -111,8 +112,39 @@ pure subroutine project_fluxes(z_centers, rays, flux_x, flux_y)
 
 end subroutine project_fluxes
 
-pure subroutine update_mean_state(z_full, p_full, temp, uuu, vvv, &
-    z_centers, z_faces, u_bar, v_bar, rho, N2)
+pure subroutine update_mean_gradients(z, u_bar, v_bar, N2, G2, &
+    du_dr, dv_dr, dN2_dr, dG2_dr)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(q_max), intent(in)  :: z
+    real, dimension(q_max), intent(in)  :: u_bar, v_bar, N2, G2
+    real, dimension(q_max), intent(out) :: du_dr, dv_dr, dN2_dr, dG2_dr
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: q, q_hi, q_lo
+    real :: dz
+
+    ! --------------------------------------------------------------------------
+
+    do q = 1, q_max
+        q_hi = max(1, q - 1)
+        q_lo = min(q_max, q + 1)
+        dz = z(q_hi) - z(q_lo)
+
+        du_dr(q) = (u_bar(q_hi) - u_bar(q_lo)) / dz
+        dv_dr(q) = (v_bar(q_hi) - v_bar(q_lo)) / dz
+        dN2_dr(q) = (N2(q_hi) - N2(q_lo)) / dz
+        dG2_dr(q) = (G2(q_hi) - G2(q_lo)) / dz
+    end do
+    
+end subroutine update_mean_gradients
+
+pure subroutine update_mean_fields(z_full, p_full, temp, uuu, vvv, &
+    z_centers, z_faces, u_bar, v_bar, rho, N2, G2)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -122,13 +154,13 @@ pure subroutine update_mean_state(z_full, p_full, temp, uuu, vvv, &
     real, dimension(0:q_max + 1, i_max, j_max), intent(out) :: z_centers
     real, dimension(q_max + 1, i_max, j_max),   intent(out) :: z_faces
     real, dimension(q_max, i_max, j_max),       intent(out) :: u_bar, v_bar, &
-                                                               rho, N2
+                                                               rho, N2, G2
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, q, q_hi, q_lo
-    real :: dTdz
+    real :: dT_dz, drho_dz, dz
 
     ! --------------------------------------------------------------------------
 
@@ -137,19 +169,8 @@ pure subroutine update_mean_state(z_full, p_full, temp, uuu, vvv, &
             do i = 1, i_max
                 u_bar(q, i, j) = uuu(i, j, q)
                 v_bar(q, i, j) = vvv(i, j, q)
-                rho(q, i, j) = p_full(i, j, q) / RDGAS / temp(i, j, q)
                 z_centers(q, i, j) = z_full(i, j, q)
-
-                q_hi = max(1, q - 1)
-                q_lo = min(q_max, q + 1)
-                dTdz = &
-                    (temp(i, j, q_hi) - temp(i, j, q_lo)) / &
-                    (z_full(i, j, q_hi) - z_full(i, j, q_lo))
-
-                N2(q, i, j) = max( &
-                    (GRAV / temp(i, j, q)) * (dTdz + GRAV / CP_AIR), &
-                    min_N2 &
-                )
+                rho(q, i, j) = p_full(i, j, q) / RDGAS / temp(i, j, q)
             end do
         end do
     end do
@@ -158,6 +179,26 @@ pure subroutine update_mean_state(z_full, p_full, temp, uuu, vvv, &
     z_centers(0, :, :) = 2 * z_centers(1, :, :) - z_centers(2, :, :)
     z_faces = (z_centers(1:, :, :) + z_centers(:q_max, :, :)) / 2.
 
-end subroutine update_mean_state
+    do j = 1, j_max
+        do i = 1, i_max
+            do q = 1, q_max
+                q_hi = max(1, q - 1)
+                q_lo = min(q_max, q + 1)
+                
+                dz = z_centers(q_hi, i, j) - z_centers(q_lo, i, j)
+                drho_dz = (rho(q_hi, i, j) - rho(q_lo, i, j)) / dz
+                dT_dz = (temp(i, j, q_hi) - temp(i, j, q_lo)) / dz
+
+                N2(q, i, j) = max(0., &
+                    (GRAV / temp(i, j, q)) * (dT_dz + GRAV / CP_AIR))
+
+                G2(q, i, j) = ((1. / 2. - 2. / 7.) * drho_dz / &
+                    (-2. * rho(q, i, j))) ** 2
+
+            end do
+        end do
+    end do
+
+end subroutine update_mean_fields
 
 end module msgwam_mean_mod

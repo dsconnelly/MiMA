@@ -17,7 +17,7 @@ use msgwam_constants_mod, only: i_max, init_msgwam_constants, j_max, n_max, &
 use msgwam_io_mod,        only: init_nc_output, init_ray_state, &
                                 save_ray_state, send_nc_output
 use msgwam_mean_mod,      only: get_accelerations, project_fluxes, &
-                                update_mean_state
+                                update_mean_fields
 use msgwam_rays_mod,      only: t_ray
 use msgwam_RK4_mod,       only: take_RK4_step
 use msgwam_sinks_mod,     only: apply_breaking, apply_dissipation, &
@@ -48,7 +48,7 @@ integer, dimension(5) :: clocks
 ! mean state variables
 ! ==============================================================================
 
-real, dimension(:, :, :), allocatable :: flux_x, flux_y, N2, rho, u_bar, &
+real, dimension(:, :, :), allocatable :: flux_x, flux_y, rho, N2, G2, u_bar, &
                                          v_bar, z_centers, z_faces
 
 ! ==============================================================================
@@ -104,8 +104,10 @@ subroutine msgwam_init(lon_bounds, lat_bounds, p_ref, Time, axes)
 
     call init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
 
-    allocate(N2(q_max, i_max, j_max))
     allocate(rho(q_max, i_max, j_max))
+    allocate(N2(q_max, i_max, j_max))
+    allocate(G2(q_max, i_max, j_max))
+
     allocate(u_bar(q_max, i_max, j_max))
     allocate(v_bar(q_max, i_max, j_max))
 
@@ -148,9 +150,6 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     ! --------------------------------------------------------------------------
     real :: dt_rays
 
-    real :: test
-    integer, dimension(3) :: locs
-
     ! --------------------------------------------------------------------------
 
     if (is_first_step) then
@@ -161,12 +160,12 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     end if
 
     call mpp_clock_begin(clocks(1))
-    call update_mean_state(z_full, p_full, temp, uuu, vvv, &
-        z_centers, z_faces, u_bar, v_bar, rho, N2)
+    call update_mean_fields(z_full, p_full, temp, uuu, vvv, &
+        z_centers, z_faces, u_bar, v_bar, rho, N2, G2)
     call mpp_clock_end(clocks(1))
 
     call mpp_clock_begin(clocks(2))
-    call take_RK4_step(z_centers, u_bar, v_bar, N2, dt_rays, rays)
+    call take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt_rays, rays)
     call mpp_clock_end(clocks(2))
 
     call mpp_clock_begin(clocks(3))
@@ -176,7 +175,7 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     call mpp_clock_end(clocks(3))
 
     call mpp_clock_begin(clocks(4))
-    call check_source(z_centers, u_bar, v_bar, N2, dt_rays, &
+    call check_source(z_centers, u_bar, v_bar, N2, G2, dt_rays, &
         rays, ghosts, last_meta)
     call mpp_clock_end(clocks(4))
 
@@ -195,55 +194,5 @@ subroutine msgwam_end
     is_initialized = .false.
 
 end subroutine msgwam_end
-
-subroutine debug_checks(rays)
-
-    use fms_mod, only: mpp_pe
-    use msgwam_constants_mod, only: dr_min
-
-    type(t_ray), dimension(n_max, i_max, j_max), intent(in) :: rays
-
-    integer :: i, j, n
-
-    do j = 1, j_max
-        do i = 1, i_max
-            do n = 1, n_max
-
-                if (rays(n, i, j)%meta == -1) then
-                    cycle
-                end if
-
-                associate(ray => rays(n, i, j))
-
-                    if (ray%r_hi < ray%r_lo) then
-                        write(*, *) "flipped at", mpp_pe(), n, i, j
-                    end if
-
-                    if (ray%dens < 0) then
-                        write(*, *) "dens < 0 at", mpp_pe(), n, i, j
-                    end if
-
-                    if (ray%dm < 0) then
-                        write(*, *) "dm < 0 at", mpp_pe(), n, i, j
-                    end if
-
-                    if ((ray%q_hi < 1) .or. (ray%q_lo > q_max - 1)) then
-                        write(*, *) ray%q_hi, ray%q_lo, "q OOB at", mpp_pe(), n, i, j
-                    end if
-
-                    if (ray%r_hi - ray%r_lo < dr_min) then
-                        write(*, *) "too small at", mpp_pe(), n, i, j, ray%r_hi - ray%r_lo
-                    end if
-
-                    if (ray%m > 0) then
-                        write(*, *) "reflected at", mpp_pe(), n, i, j, (ray%r_hi + ray%r_lo) / 2.
-                    end if
-
-                end associate
-            end do
-        end do
-    end do
-
-end subroutine debug_checks
 
 end module msgwam_mod

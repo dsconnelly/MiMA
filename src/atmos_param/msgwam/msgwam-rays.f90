@@ -11,7 +11,7 @@ private
 public delete_ray, get_cg_r, get_dm, get_m, get_omega_hat, t_ray
 
 type :: t_ray
-    real :: r_hi, r_lo, k, l, m, dm, dens, cg_r, omega_hat
+    real :: r_hi, r_lo, k, l, m, dm, dens, cg_r, omega_hat, G2
     integer :: age, meta, q_hi, q_lo, q_mid
     logical :: is_ghost
 end type t_ray
@@ -49,6 +49,7 @@ pure subroutine delete_ray(ray)
 
     ray%cg_r = 0.
     ray%omega_hat = 0.
+    ray%G2 = 0.
 
     ray%age = 0
     ray%meta = -1

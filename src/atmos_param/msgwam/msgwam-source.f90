@@ -9,9 +9,9 @@ use constants_mod,        only: PI
 use fms_mod,              only: error_mesg, FATAL
 
 use msgwam_constants_mod, only: boundary_flux, cp_max, cp_width, dr_source, &
-                                epsilon, f2, Gamma2, i_max, j_max, &
-                                is_extrinsic, n_max, n_source, q_max, &
-                                source_pressure, T_hat_source
+                                epsilon, f2, i_max, j_max, is_extrinsic, &
+                                n_max, n_source, q_max, source_pressure, &
+                                T_hat_source
 use msgwam_rays_mod,      only: get_cg_r, get_dm, get_m, delete_ray, t_ray
 use msgwam_utils_mod,     only: interp, locate
 
@@ -31,7 +31,7 @@ real, dimension(4) :: SIN_PHI = (/ 0., 1., 0., -1. /)
 
 contains
 
-subroutine check_source(z_centers, u_bar, v_bar, N2, dt, &
+subroutine check_source(z_centers, u_bar, v_bar, N2, G2, dt, &
     rays, ghosts, last_meta)
 
     ! --------------------------------------------------------------------------
@@ -39,7 +39,7 @@ subroutine check_source(z_centers, u_bar, v_bar, N2, dt, &
     ! --------------------------------------------------------------------------
     real, dimension(0:q_max + 1, i_max, j_max),  intent(in)    :: z_centers
     real, dimension(q_max, i_max, j_max),        intent(in)    :: u_bar, &
-                                                                  v_bar, N2
+                                                                  v_bar, N2, G2
     real,                                        intent(in)    :: dt
     type(t_ray), dimension(n_max, i_max, j_max), intent(inout) :: rays
     integer, dimension(n_source, i_max, j_max),  intent(inout) :: ghosts
@@ -54,7 +54,7 @@ subroutine check_source(z_centers, u_bar, v_bar, N2, dt, &
     ! --------------------------------------------------------------------------
 
     n_excess = count(rays(:, :, :)%meta /= -1, dim=1)
-    call update_launches(z_centers, u_bar, v_bar, N2, dt, rays, ghosts, &
+    call update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
         last_meta, n_excess, launches)
 
     n_excess = max(n_excess - n_max, 0)
@@ -219,7 +219,7 @@ pure subroutine prune(n_excess, rays)
 
 end subroutine prune
 
-subroutine update_launches(z_centers, u_bar, v_bar, N2, dt, rays, ghosts, &
+subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
     last_meta, n_added, launches)
 
     ! --------------------------------------------------------------------------
@@ -227,7 +227,8 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, dt, rays, ghosts, &
     ! --------------------------------------------------------------------------
     real, dimension(0:q_max + 1, i_max, j_max),     intent(in)    :: z_centers
     real, dimension(q_max, i_max, j_max),           intent(in)    :: u_bar, &
-                                                                     v_bar, N2
+                                                                     v_bar, &
+                                                                     N2, G2
     real,                                           intent(in)    :: dt
     type(t_ray), dimension(n_max, i_max, j_max),    intent(in)    :: rays
     integer, dimension(n_source, i_max, j_max),     intent(in)    :: ghosts
@@ -240,8 +241,8 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, dt, rays, ghosts, &
     ! --------------------------------------------------------------------------
     logical :: cleared
     integer :: dir, i, j, n, q_hi, q_lo, q_mid, s
-    real :: cg, cp, flux, k, l, m, mag_cp_hat, mag_wvn_hor, N2_source, prob, &
-            r, r_lo, r_hi, total, u, v
+    real :: cg, cp, flux, G2_source, k, l, m, mag_cp_hat, mag_wvn_hor, &
+            N2_source, prob, r, r_lo, r_hi, total, u, v
     real, dimension(n_source, i_max, j_max) :: rand
 
     ! --------------------------------------------------------------------------
@@ -256,13 +257,15 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, dt, rays, ghosts, &
 
             associate( &
                 z => z_centers(1:q_max, i, j), &
-                N2_col => N2(:, i, j) &
+                N2_col => N2(:, i, j), &
+                G2_col => G2(:, i, j) &
             )
                 q_hi = locate(r_hi, z, q_source)
                 q_lo = locate(r_lo, z, q_source)
                 q_mid = locate(r, z, q_source)
 
                 N2_source = interp(z, N2_col, r, q_mid)
+                G2_source = interp(z, G2_col, r, q_mid)
             end associate
 
             total = 0.
@@ -302,7 +305,7 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, dt, rays, ghosts, &
                     l = mag_wvn_hor * SIN_PHI(dir)
 
                     m = get_m(k, l, omega_hat_source ** 2, N2_source, f2(j))
-                    cg = get_cg_r(k, l, m, N2_source, f2(j), Gamma2)
+                    cg = get_cg_r(k, l, m, N2_source, f2(j), G2_source)
 
                     associate (ray => launches(s, i, j))
                         if (is_stochastic) then
@@ -325,6 +328,7 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, dt, rays, ghosts, &
 
                         ray%cg_r = cg
                         ray%omega_hat = omega_hat_source
+                        ray%G2 = G2_source
 
                         ray%age = 0
                         ray%meta = last_meta(i, j)
