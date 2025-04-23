@@ -7,7 +7,7 @@ module msgwam_sinks_mod
 use msgwam_constants_mod, only: break_waves, f2, i_max, j_max, max_age, &
                                 min_flux, mu, n_max, q_max
 use msgwam_rays_mod,      only: delete_ray, t_ray
-use msgwam_utils_mod,     only: interp
+use msgwam_utils_mod,     only: get_interp_coeffs
 
 implicit none
 private
@@ -123,7 +123,7 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n
-    real :: damping, nu, r, wvn_sq
+    real :: a, b, damping, nu, r, wvn_sq
 
     ! --------------------------------------------------------------------------
 
@@ -145,8 +145,10 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
 
                     associate (ray => rays(n, i, j))
                         r = (ray%r_lo + ray%r_hi) / 2.
-                        nu = interp(z_col, nu_col, r, ray%q_mid)
                         wvn_sq = ray%k ** 2 + ray%l ** 2 + ray%m ** 2 + ray%G2
+
+                        call get_interp_coeffs(z_col, r, ray%q_mid, a, b)
+                        nu = a * nu_col(ray%q_mid) + b * nu_col(ray%q_mid + 1)
 
                         damping = nu * wvn_sq * (1 + f2(j) / ray%omega_hat ** 2)
                         ray%dens = ray%dens * exp(-dt * damping)

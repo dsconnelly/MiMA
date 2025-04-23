@@ -7,7 +7,7 @@ module msgwam_utils_mod
 implicit none
 private
 
-public get_interp_coeffs, interp, locate, shapiro_filter
+public get_interp_coeffs, locate, shapiro_filter
 
 contains
 
@@ -34,50 +34,16 @@ pure subroutine get_interp_coeffs(z, r, q, a, b)
     if (r > z(1)) then
         a = 1.
         b = 0.
-
     else if (r < z(q_max)) then
         a = 0.
         b = 1.
-
     else
         dz = z(q) - z(q + 1)
         a = (r - z(q + 1)) / dz
         b = (z(q) - r) / dz
-
     end if
 
 end subroutine get_interp_coeffs
-
-pure function interp(z, profile, r, q) result(v)
-
-    ! --------------------------------------------------------------------------
-    ! arguments
-    ! --------------------------------------------------------------------------
-    real, dimension(:), intent(in) :: z, profile
-    real,               intent(in) :: r
-    integer,            intent(in) :: q
-    real                           :: v
-
-    ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    integer :: q_max
-    real :: dz
-
-    ! --------------------------------------------------------------------------
-
-    q_max = size(z)
-
-    if (r > z(1)) then
-        v = profile(1)
-    else if (r < z(q_max)) then
-        v = profile(q_max)
-    else
-        dz = z(q) - z(q + 1)
-        v = profile(q + 1) * (z(q) - r) / dz + profile(q) * (r - z(q + 1)) / dz
-    end if
-
-end function interp
 
 pure function locate(r, z, q_guess) result(q)
 

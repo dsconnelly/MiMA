@@ -13,7 +13,7 @@ use msgwam_constants_mod, only: boundary_flux, cp_max, cp_width, dr_source, &
                                 n_max, n_source, q_max, source_pressure, &
                                 T_hat_source
 use msgwam_rays_mod,      only: get_cg_r, get_dm, get_m, delete_ray, t_ray
-use msgwam_utils_mod,     only: interp, locate
+use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
 implicit none
 private
@@ -241,7 +241,7 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
     ! --------------------------------------------------------------------------
     logical :: cleared
     integer :: dir, i, j, n, q_hi, q_lo, q_mid, s
-    real :: cg, cp, flux, G2_source, k, l, m, mag_cp_hat, mag_wvn_hor, &
+    real :: a, b, cg, cp, flux, G2_source, k, l, m, mag_cp_hat, mag_wvn_hor, &
             N2_source, prob, r, r_lo, r_hi, total, u, v
     real, dimension(n_source, i_max, j_max) :: rand
 
@@ -264,8 +264,9 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                 q_lo = locate(r_lo, z, q_source)
                 q_mid = locate(r, z, q_source)
 
-                N2_source = interp(z, N2_col, r, q_mid)
-                G2_source = interp(z, G2_col, r, q_mid)
+                call get_interp_coeffs(z, r, q_mid, a, b)
+                N2_source = a * N2_col(q_mid) + b * N2_col(q_mid + 1)
+                G2_source = a * G2_col(q_mid) + b * G2_col(q_mid + 1)
             end associate
 
             total = 0.
