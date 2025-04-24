@@ -139,7 +139,7 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
             )
 
                 do n = 1, n_max
-                    if (rays(n, i, j)%meta == 1) then
+                    if (rays(n, i, j)%meta == -1) then
                         cycle
                     end if
 
