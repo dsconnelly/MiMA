@@ -189,7 +189,7 @@ pure subroutine update_mean_fields(z_full, p_full, temp, uuu, vvv, &
                 drho_dz = (rho(q_hi, i, j) - rho(q_lo, i, j)) / dz
                 dT_dz = (temp(i, j, q_hi) - temp(i, j, q_lo)) / dz
 
-                N2(q, i, j) = max(0., &
+                N2(q, i, j) = max(min_N2, &
                     (GRAV / temp(i, j, q)) * (dT_dz + GRAV / CP_AIR))
 
                 G2(q, i, j) = ((1. / 2. - 2. / 7.) * drho_dz / &

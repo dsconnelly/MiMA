@@ -75,6 +75,10 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
                 area = (ray%r_hi - ray%r_lo) * ray%dm
                 r = 0.5 * (ray%r_hi + ray%r_lo)
 
+                ray%q_hi = locate(ray%r_hi, z, ray%q_hi)
+                ray%q_lo = locate(ray%r_lo, z, ray%q_lo)
+                ray%q_mid = locate(r, z, ray%q_mid)
+
                 do stage = 1, 4
 
                     call get_interp_coeffs(z, ray%r_hi, ray%q_hi, a, b)
@@ -168,6 +172,7 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
 
                 ray%cg_r = get_cg_r(ray, N2_mid, f2(j), G2_mid)
                 ray%omega_hat = get_omega_hat(ray, N2_mid, f2(j), G2_mid)
+                ray%G2 = G2_mid
 
                 end associate
 

@@ -33,3 +33,4 @@ bin/mppnccombine.nyu
 
 .DS_Store
 .vscode/*
+*.code-workspace

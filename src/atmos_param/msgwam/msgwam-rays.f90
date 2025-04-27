@@ -61,27 +61,27 @@ pure subroutine delete_ray(ray)
 
 end subroutine delete_ray
 
-pure function get_cg_r_from_ray(ray, N2, f2, Gamma2) result(cg_r)
+pure function get_cg_r_from_ray(ray, N2, f2, G2) result(cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
     type(t_ray), intent(in) :: ray
-    real,        intent(in) :: N2, f2, Gamma2
+    real,        intent(in) :: N2, f2, G2
     real                    :: cg_r
 
     ! --------------------------------------------------------------------------
 
-    cg_r = get_cg_r_from_reals(ray%k, ray%l, ray%m, N2, f2, Gamma2)
+    cg_r = get_cg_r_from_reals(ray%k, ray%l, ray%m, N2, f2, G2)
 
 end function get_cg_r_from_ray
 
-pure function get_cg_r_from_reals(k, l, m, N2, f2, Gamma2) result(cg_r)
+pure function get_cg_r_from_reals(k, l, m, N2, f2, G2) result(cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, m, N2, f2, Gamma2
+    real, intent(in) :: k, l, m, N2, f2, G2
     real             :: cg_r
 
     ! --------------------------------------------------------------------------
@@ -91,8 +91,8 @@ pure function get_cg_r_from_reals(k, l, m, N2, f2, Gamma2) result(cg_r)
 
     ! --------------------------------------------------------------------------
 
-    wvn_sq = k ** 2 + l ** 2 + m ** 2 + Gamma2
-    omega_hat = get_omega_hat(k, l, m, N2, f2, Gamma2)
+    wvn_sq = k ** 2 + l ** 2 + m ** 2 + G2
+    omega_hat = get_omega_hat(k, l, m, N2, f2, G2)
 
     cg_r = -m * (omega_hat ** 2 - f2) / (omega_hat * wvn_sq)
 
@@ -112,12 +112,12 @@ pure function get_dm(m, dc, N2) result(dm)
 
 end function get_dm
 
-pure function get_m(k, l, omega_hat_sq, N2, f2) result(m)
+pure function get_m(k, l, omega_hat_sq, N2, f2, G2) result(m)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, omega_hat_sq, N2, f2
+    real, intent(in) :: k, l, omega_hat_sq, N2, f2, G2
     real             :: m
 
     ! --------------------------------------------------------------------------
@@ -125,31 +125,31 @@ pure function get_m(k, l, omega_hat_sq, N2, f2) result(m)
     m = -sqrt( &
         (k ** 2 + l ** 2) * (N2 - omega_hat_sq) / &
         (omega_hat_sq - f2) &
-    )
+    - G2)
 
 end function get_m
 
-pure function get_omega_hat_from_ray(ray, N2, f2, Gamma2) result(omega_hat)
+pure function get_omega_hat_from_ray(ray, N2, f2, G2) result(omega_hat)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
     type(t_ray), intent(in) :: ray
-    real,        intent(in) :: N2, f2, Gamma2
+    real,        intent(in) :: N2, f2, G2
     real                    :: omega_hat
 
     ! --------------------------------------------------------------------------
     
-    omega_hat = get_omega_hat_from_reals(ray%k, ray%l, ray%m, N2, f2, Gamma2)
+    omega_hat = get_omega_hat_from_reals(ray%k, ray%l, ray%m, N2, f2, G2)
 
 end function get_omega_hat_from_ray
 
-pure function get_omega_hat_from_reals(k, l, m, N2, f2, Gamma2) result(omega_hat)
+pure function get_omega_hat_from_reals(k, l, m, N2, f2, G2) result(omega_hat)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, m, N2, f2, Gamma2
+    real, intent(in) :: k, l, m, N2, f2, G2
     real             :: omega_hat
 
     ! --------------------------------------------------------------------------
@@ -160,7 +160,7 @@ pure function get_omega_hat_from_reals(k, l, m, N2, f2, Gamma2) result(omega_hat
     ! --------------------------------------------------------------------------
     
     wvn_hor_sq = k ** 2 + l ** 2
-    wvn_ver_sq = m ** 2 + Gamma2
+    wvn_ver_sq = m ** 2 + G2
 
     omega_hat = sqrt( &
         (N2 * wvn_hor_sq + f2 * wvn_ver_sq) / &

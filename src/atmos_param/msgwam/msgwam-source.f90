@@ -305,7 +305,8 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                     k = mag_wvn_hor * COS_PHI(dir)
                     l = mag_wvn_hor * SIN_PHI(dir)
 
-                    m = get_m(k, l, omega_hat_source ** 2, N2_source, f2(j))
+                    m = get_m(k, l, omega_hat_source ** 2, &
+                        N2_source, f2(j), G2_source)
                     cg = get_cg_r(k, l, m, N2_source, f2(j), G2_source)
 
                     associate (ray => launches(s, i, j))

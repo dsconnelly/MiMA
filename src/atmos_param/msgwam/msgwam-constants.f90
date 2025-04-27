@@ -27,7 +27,6 @@ real    :: epsilon            = 0.
 real    :: lat_extrinsic      = 15.
 integer :: max_age            = 10 * 86400
 real    :: min_flux           = 1.e-8
-real    :: min_N2             = 0.005 ** 2
 real    :: mu                 = 1.e-3
 integer :: n_max              = 2500
 integer :: n_source           = 48
@@ -40,8 +39,8 @@ real    :: H_rho              = 8.e+3
 
 namelist / msgwam_nml / &
     boundary_flux, break_waves, cp_max, cp_width, dr_min, dr_source, epsilon, &
-    lat_extrinsic, max_age, min_flux, min_N2, mu, n_max, n_source, &
-    source_pressure, T_hat_source, use_shapiro_filter, H_rho
+    lat_extrinsic, max_age, min_flux, mu, n_max, n_source, source_pressure, &
+    T_hat_source, use_shapiro_filter, H_rho
 
 private :: lat_extrinsic, msgwam_nml
 
@@ -52,6 +51,7 @@ private :: lat_extrinsic, msgwam_nml
 integer :: i_max, j_max, q_max
 real, dimension(:), allocatable :: f2
 logical, dimension(:), allocatable :: is_extrinsic
+real :: min_N2
 
 contains
 
@@ -99,6 +99,8 @@ subroutine init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
         is_extrinsic(j) = abs(180 * lat / PI) > lat_extrinsic
         f2(j) = (2 * PI * sin(lat) / 86400.) ** 2
     end do
+
+    min_N2 = (2 * PI / (2 * 3600)) ** 2
 
 end subroutine init_msgwam_constants
 
