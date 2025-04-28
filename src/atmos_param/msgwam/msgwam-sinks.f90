@@ -5,7 +5,7 @@ module msgwam_sinks_mod
 ! ==============================================================================
 
 use msgwam_constants_mod, only: break_waves, f2, i_max, j_max, max_age, &
-                                min_flux, mu, n_max, q_max
+                                min_flux, mu, n_max, n_sponge, q_max
 use msgwam_rays_mod,      only: delete_ray, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs
 
@@ -161,22 +161,33 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
 
 end subroutine apply_dissipation
 
-pure subroutine check_boundaries(z_centers, rays)
+ subroutine check_boundaries(dt, z_centers, z_faces, rho, rays, &
+    sponge_x, sponge_y)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
+    real,                                        intent(in)    :: dt
     real, dimension(0:q_max + 1, i_max, j_max),  intent(in)    :: z_centers
+    real, dimension(q_max + 1, i_max, j_max),    intent(in)    :: z_faces
+    real, dimension(q_max, i_max, j_max),        intent(in)    :: rho
     type(t_ray), dimension(n_max, i_max, j_max), intent(inout) :: rays
+    real, dimension(i_max, j_max),               intent(out)   :: sponge_x, &
+                                                                  sponge_y
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    logical :: delete
+    logical :: above, delete
     integer :: i, j, n
-    real :: flux, wvn, z_hi, z_lo
+    real :: avail, flux, wvn, z_hi, z_lo
+    real, dimension(n_sponge, i_max, j_max) :: dz
+    real, dimension(i_max, j_max) :: prefactor
 
     ! --------------------------------------------------------------------------
+
+    sponge_x = 0.
+    sponge_y = 0.
 
     do j = 1, j_max
         do i = 1, i_max
@@ -192,10 +203,17 @@ pure subroutine check_boundaries(z_centers, rays)
                     wvn = sqrt(ray%k ** 2 + ray%l ** 2)
                     flux = wvn * ray%dens * ray%dm * ray%cg_r
 
-                    delete = ray%r_hi < z_lo
-                    delete = delete .or. (ray%r_lo > z_hi)
+                    above = ray%r_lo > z_hi
+                    delete = above .or. (ray%r_hi < z_lo)
                     delete = delete .or. (abs(flux) < min_flux)
                     delete = delete .or. (ray%age > max_age)
+
+                    if (above .and. n_sponge > 0) then
+                        avail = ray%dens * ray%dm * (ray%r_hi - ray%r_lo)
+                        sponge_x(i, j) = sponge_x(i, j) + ray%k * avail
+                        sponge_y(i, j) = sponge_y(i, j) + ray%l * avail
+                    end if
+
                 end associate
 
                 if (delete) then
@@ -205,6 +223,14 @@ pure subroutine check_boundaries(z_centers, rays)
 
         end do
     end do
+
+    if (n_sponge > 0) then
+        dz = z_faces(1:n_sponge, :, :) - z_faces(2:(n_sponge + 1), :, :)
+        prefactor = 1 / sum(dt * dz * rho(1:n_sponge, :, :), dim=1)
+
+        sponge_x = prefactor * sponge_x
+        sponge_y = prefactor * sponge_y
+    end if
 
 end subroutine check_boundaries
 

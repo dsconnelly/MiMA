@@ -49,6 +49,7 @@ integer, dimension(5) :: clocks
 ! mean state variables
 ! ==============================================================================
 
+real, dimension(:, :), allocatable    :: sponge_x, sponge_y
 real, dimension(:, :, :), allocatable :: flux_x, flux_y, rho, N2, G2, u_bar, &
                                          v_bar, z_centers, z_faces
 
@@ -122,6 +123,9 @@ subroutine msgwam_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(ghosts(n_source, i_max, j_max))
     allocate(last_meta(i_max, j_max))
 
+    allocate(sponge_x(i_max, j_max))
+    allocate(sponge_y(i_max, j_max))
+
     call init_source(p_ref)
     call init_clocks(clocks)
     call init_nc_output(axes, Time)
@@ -159,45 +163,46 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     end if
 
     call track_ray(rays, 1)
-
     call mpp_clock_begin(clocks(1))
+
     call update_mean_fields(z_full, p_full, temp, uuu, vvv, &
         z_centers, z_faces, u_bar, v_bar, rho, N2, G2)
+
     call mpp_clock_end(clocks(1))
-
     call track_ray(rays, 2)
-
     call mpp_clock_begin(clocks(2))
+
     call take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt_rays, rays)
+
     call mpp_clock_end(clocks(2))
-
     call track_ray(rays, 3)
-
     call mpp_clock_begin(clocks(3))
+
     call apply_dissipation(z_centers, rho, dt_rays, rays)
     call apply_breaking(z_faces, rho, rays)
-    call check_boundaries(z_centers, rays)
+    call check_boundaries(dt, z_centers, z_faces, rho, rays, &
+        sponge_x, sponge_y)
+
     call mpp_clock_end(clocks(3))
-
     call track_ray(rays, 4)
-
     call mpp_clock_begin(clocks(4))
+
     call check_source(z_centers, u_bar, v_bar, N2, G2, dt_rays, &
         rays, ghosts, last_meta)
+
     call mpp_clock_end(clocks(4))
-
     call track_ray(rays, 5)
-
     call mpp_clock_begin(clocks(5))
-    call project_fluxes(z_centers, rays, flux_x, flux_y)
-    call get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
-    call mpp_clock_end(clocks(5))
 
+    call project_fluxes(z_centers, rays, flux_x, flux_y)
+    call get_accelerations(z_faces, rho, flux_x, flux_y, &
+        sponge_x, sponge_y, du_dt, dv_dt)
+
+    call mpp_clock_end(clocks(5))
     call track_ray(rays, 6)
+    call check_rays(rays)
 
     call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
-
-    call check_rays(rays)
 
 end subroutine msgwam_calc
 

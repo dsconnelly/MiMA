@@ -30,6 +30,7 @@ real    :: min_flux           = 1.e-8
 real    :: mu                 = 1.e-3
 integer :: n_max              = 2500
 integer :: n_source           = 48
+integer :: n_sponge           = 3
 real    :: source_pressure    = 300.e2
 real    :: T_hat_source       = 10. * 3600
 logical :: use_shapiro_filter = .true.
@@ -40,7 +41,7 @@ integer, dimension(5) :: track      = (/ 0, 1, 1, 1, 1/)
 
 namelist / msgwam_nml / &
     boundary_flux, break_waves, cp_max, cp_width, dr_min, dr_source, &
-    epsilon, lat_extrinsic, max_age, min_flux, mu, n_max, n_source, &
+    epsilon, lat_extrinsic, max_age, min_flux, mu, n_max, n_source, n_sponge, &
     source_pressure, T_hat_source, use_shapiro_filter, &
     debug_mode, track
 
