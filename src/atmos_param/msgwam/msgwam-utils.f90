@@ -4,6 +4,8 @@ module msgwam_utils_mod
 ! Various utility functions for MS-GWaM.
 ! ==============================================================================
 
+use msgwam_constants_mod, only: q_max
+
 implicit none
 private
 
@@ -16,32 +18,25 @@ pure subroutine get_interp_coeffs(z, r, q, a, b)
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:), intent(in) :: z
-    real,               intent(in) :: r
-    integer,            intent(in) :: q
-    real,               intent(out) :: a, b
+    real, dimension(q_max),     intent(in)  :: z
+    real,                       intent(in)  :: r
+    integer,                    intent(in)  :: q
+    real,                       intent(out) :: a, b
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: q_max
-    real :: dz
+    logical :: above, below
+    real :: s
 
     ! --------------------------------------------------------------------------
 
-    q_max = size(z)
+    above = r > z(1)
+    below = r < z(q_max)
 
-    if (r > z(1)) then
-        a = 1.
-        b = 0.
-    else if (r < z(q_max)) then
-        a = 0.
-        b = 1.
-    else
-        dz = z(q) - z(q + 1)
-        a = (r - z(q + 1)) / dz
-        b = (z(q) - r) / dz
-    end if
+    s = (r - z(q + 1)) / (z(q) - z(q + 1))
+    a = merge(1., merge(0., s, below), above)
+    b = 1. - a
 
 end subroutine get_interp_coeffs
 
@@ -50,19 +45,18 @@ pure function locate(r, z, q_guess) result(q)
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real,               intent(in) :: r
-    real, dimension(:), intent(in) :: z
-    integer,            intent(in) :: q_guess
-    integer                        :: q
+    real,                   intent(in) :: r
+    real, dimension(q_max), intent(in) :: z
+    integer,                intent(in) :: q_guess
+    integer                            :: q
 
     ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    integer :: q_max
+    integer :: dir
 
     ! --------------------------------------------------------------------------
 
-    q_max = size(z)
+    q = q_guess
+    if (z(q) >= r .and. r > z(q + 1)) return
 
     if (r > z(1)) then
         q = 1
@@ -74,15 +68,11 @@ pure function locate(r, z, q_guess) result(q)
         return
     end if
 
-    q = q_guess
+    dir = merge(-1, 1, r > z(q))
+
     do while (.true.)
-        if (z(q) < r) then
-            q = q - 1
-        else if (z(q + 1) .ge. r) then
-            q = q + 1
-        else ! z(q) => r > z(q + 1)
-            exit
-        end if
+        q = q + dir
+        if (z(q) >= r .and. r > z(q + 1)) return
     end do
 
 end function locate

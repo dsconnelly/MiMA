@@ -51,22 +51,23 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
     do j = 1, j_max
         do i = 1, i_max
 
-            call update_mean_gradients(z_centers(1:q_max, i, j), &
-                u_bar(:, i, j), v_bar(:, i, j), N2(:, i, j), G2(:, i, j), &
-                du_dr, dv_dr, dN2_dr, dG2_dr)
+            associate( &
+                N2_col => N2(:, i, j), &
+                G2_col => G2(:, i, j), &
+                z => z_centers(1:q_max, i, j) &
+            )
 
+            call update_mean_gradients(z_centers(1:q_max, i, j), &
+                u_bar(:, i, j), v_bar(:, i, j), N2_col, G2_col, &
+                du_dr, dv_dr, dN2_dr, dG2_dr)
+        
             do n = 1, n_max
 
                 if (rays(n, i, j)%meta == -1) then
                     cycle
                 end if
 
-                associate( &
-                    ray => rays(n, i, j), &
-                    N2_col => N2(:, i, j), &
-                    G2_col => G2(:, i, j), &
-                    z => z_centers(1:q_max, i, j) &    
-                )
+                associate(ray => rays(n, i, j))
 
                 incs(0)%r_lo = ray%r_lo
                 incs(0)%r_hi = ray%r_hi
@@ -177,6 +178,9 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
                 end associate
 
             end do
+
+            end associate
+
         end do
     end do
 
