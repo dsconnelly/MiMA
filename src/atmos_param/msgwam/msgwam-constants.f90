@@ -34,13 +34,15 @@ real    :: source_pressure    = 300.e2
 real    :: T_hat_source       = 10. * 3600
 logical :: use_shapiro_filter = .true.
 
-! To be removed, eventually.
-real    :: H_rho              = 8.e+3
+! These namelist parameters are for debugging only.
+integer               :: debug_mode = 0
+integer, dimension(5) :: track      = (/ 0, 1, 1, 1, 1/)
 
 namelist / msgwam_nml / &
-    boundary_flux, break_waves, cp_max, cp_width, dr_min, dr_source, epsilon, &
-    lat_extrinsic, max_age, min_flux, mu, n_max, n_source, source_pressure, &
-    T_hat_source, use_shapiro_filter, H_rho
+    boundary_flux, break_waves, cp_max, cp_width, dr_min, dr_source, &
+    epsilon, lat_extrinsic, max_age, min_flux, mu, n_max, n_source, &
+    source_pressure, T_hat_source, use_shapiro_filter, &
+    debug_mode, track
 
 private :: lat_extrinsic, msgwam_nml
 

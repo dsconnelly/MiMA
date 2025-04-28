@@ -14,6 +14,7 @@ use time_manager_mod,     only: time_manager_init, time_type
 
 use msgwam_constants_mod, only: i_max, init_msgwam_constants, j_max, n_max, &
                                 n_source, q_max
+use msgwam_debug_mod,     only: check_rays, track_ray
 use msgwam_io_mod,        only: init_nc_output, init_ray_state, &
                                 save_ray_state, send_nc_output
 use msgwam_mean_mod,      only: get_accelerations, project_fluxes, &
@@ -132,8 +133,6 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     p_full, z_full, temp, uuu, vvv, &
     Time, dt, du_dt, dv_dt)
 
-    use fms_mod, only: mpp_pe
-
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
@@ -159,14 +158,20 @@ subroutine msgwam_calc(i_start, j_start, lat, &
         dt_rays = dt / 2.
     end if
 
+    call track_ray(rays, 1)
+
     call mpp_clock_begin(clocks(1))
     call update_mean_fields(z_full, p_full, temp, uuu, vvv, &
         z_centers, z_faces, u_bar, v_bar, rho, N2, G2)
     call mpp_clock_end(clocks(1))
 
+    call track_ray(rays, 2)
+
     call mpp_clock_begin(clocks(2))
     call take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt_rays, rays)
     call mpp_clock_end(clocks(2))
+
+    call track_ray(rays, 3)
 
     call mpp_clock_begin(clocks(3))
     call apply_dissipation(z_centers, rho, dt_rays, rays)
@@ -174,17 +179,25 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     call check_boundaries(z_centers, rays)
     call mpp_clock_end(clocks(3))
 
+    call track_ray(rays, 4)
+
     call mpp_clock_begin(clocks(4))
     call check_source(z_centers, u_bar, v_bar, N2, G2, dt_rays, &
         rays, ghosts, last_meta)
     call mpp_clock_end(clocks(4))
+
+    call track_ray(rays, 5)
 
     call mpp_clock_begin(clocks(5))
     call project_fluxes(z_centers, rays, flux_x, flux_y)
     call get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
     call mpp_clock_end(clocks(5))
 
+    call track_ray(rays, 6)
+
     call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
+
+    call check_rays(rays)
 
 end subroutine msgwam_calc
 

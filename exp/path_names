@@ -83,6 +83,7 @@ atmos_param/betts_miller/bm_massflux.f90
 atmos_param/betts_miller/bm_omp.f90
 atmos_param/cg_drag/ad99.f90
 atmos_param/msgwam/msgwam-constants.f90
+atmos_param/msgwam/msgwam-debug.f90
 atmos_param/msgwam/msgwam-interface.f90
 atmos_param/msgwam/msgwam-io.f90
 atmos_param/msgwam/msgwam-mean.f90

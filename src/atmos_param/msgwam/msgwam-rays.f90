@@ -125,7 +125,7 @@ pure function get_m(k, l, omega_hat_sq, N2, f2, G2) result(m)
     m = -sqrt( &
         (k ** 2 + l ** 2) * (N2 - omega_hat_sq) / &
         (omega_hat_sq - f2) &
-    - G2)
+    )
 
 end function get_m
 
