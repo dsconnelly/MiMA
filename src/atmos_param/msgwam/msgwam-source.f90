@@ -12,8 +12,7 @@ use msgwam_constants_mod, only: boundary_flux, cp_max, cp_width, dr_source, &
                                 epsilon, f2, i_max, j_max, is_extrinsic, &
                                 n_max, n_source, q_max, source_pressure, &
                                 T_hat_source
-use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, &
-                                get_omega_hat, t_ray
+use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
 implicit none
@@ -243,7 +242,7 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
     logical :: cleared
     integer :: dir, i, j, n, q_hi, q_lo, q_mid, s
     real :: a, b, cg, cp, flux, G2_source, k, l, m, mag_cp_hat, mag_wvn_hor, &
-            N2_source, prob, r, r_lo, r_hi, total, u, v
+            omega_hat, N2_source, prob, r, r_lo, r_hi, total, u, v
     real, dimension(n_source, i_max, j_max) :: rand
 
     ! --------------------------------------------------------------------------
@@ -306,9 +305,9 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                     k = mag_wvn_hor * COS_PHI(dir)
                     l = mag_wvn_hor * SIN_PHI(dir)
 
-                    m = get_m(k, l, omega_hat_source ** 2, &
-                        N2_source, f2(j), G2_source)
-                    cg = get_cg_r(k, l, m, N2_source, f2(j), G2_source)
+                    m = get_m(k, l, omega_hat_source ** 2, N2_source, f2(j))
+                    call get_cg_r(m, k ** 2 + l ** 2, m ** 2, N2_source, &
+                        f2(j), G2_source, omega_hat, cg)
 
                     associate (ray => launches(s, i, j))
                         if (is_stochastic) then
@@ -330,8 +329,7 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                         ray%dens = flux / abs(mag_wvn_hor * ray%dm * cg)
 
                         ray%cg_r = cg
-                        ray%omega_hat = get_omega_hat(k, l, m, &
-                            N2_source, f2(j), G2_source)
+                        ray%omega_hat = omega_hat
                         ray%G2 = G2_source
 
                         ray%age = 0

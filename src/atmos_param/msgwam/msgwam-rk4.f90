@@ -6,7 +6,7 @@ module msgwam_RK4_mod
 
 use msgwam_constants_mod, only: dr_min, f2, i_max, j_max, n_max, q_max
 use msgwam_mean_mod,      only: update_mean_gradients
-use msgwam_rays_mod,      only: get_cg_r, get_omega_hat, t_ray
+use msgwam_rays_mod,      only: get_cg_r, get_omega_hat_sq, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
 implicit none
@@ -43,8 +43,8 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
 
     real, dimension(q_max) :: du_dr, dv_dr, dN2_dr, dG2_dr
     real :: a, area, b, cg_hi, cg_lo, cg_mid, dG2_mid, dN2_mid, du_mid, dv_mid, &
-            G2_hi, G2_lo, G2_mid, N2_hi, N2_lo, N2_mid, omega_hat, r, swap_r, &
-            wvn_hor_sq, wvn_ver_sq
+            G2_hi, G2_lo, G2_mid, ignore, K2pG2_inv, m2, N2_hi, N2_lo, N2_mid, &
+            omega_hat_sq, r, swap_r, wvn_hor_sq
 
     ! --------------------------------------------------------------------------
 
@@ -73,6 +73,7 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
                 incs(0)%r_hi = ray%r_hi
                 incs(0)%m = ray%m
 
+                wvn_hor_sq = ray%k ** 2 + ray%l ** 2
                 area = (ray%r_hi - ray%r_lo) * ray%dm
                 r = 0.5 * (ray%r_hi + ray%r_lo)
 
@@ -90,20 +91,23 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
                     N2_lo = a * N2_col(ray%q_lo) + b * N2_col(ray%q_lo + 1)
                     G2_lo = a * G2_col(ray%q_lo) + b * G2_col(ray%q_lo + 1)
 
-                    call get_interp_coeffs(z, r, ray%q_mid, a, b)
-                    N2_mid = a * N2_col(ray%q_mid) + b * N2_col(ray%q_mid + 1)
-                    G2_mid = a * G2_col(ray%q_mid) + b * G2_col(ray%q_mid + 1)
+                    m2 = ray%m ** 2
+                    call get_cg_r(ray%m, wvn_hor_sq, m2, N2_hi, f2(j), G2_hi, &
+                        ignore, cg_hi)
 
-                    cg_hi = get_cg_r(ray, N2_hi, f2(j), G2_hi)
-                    cg_lo = get_cg_r(ray, N2_lo, f2(j), G2_lo)
+                    call get_cg_r(ray%m, wvn_hor_sq, m2, N2_lo, f2(j), G2_lo, &
+                        ignore, cg_lo)
 
                     if (.not. ray%is_ghost) then
                         incs(stage)%r_lo = dt * cg_lo
                         incs(stage)%r_hi = dt * cg_hi
 
-                        omega_hat = get_omega_hat(ray, N2_mid, f2(j), G2_mid)
-                        wvn_hor_sq = ray%k ** 2 + ray%l ** 2
-                        wvn_ver_sq = ray%m ** 2 + G2_mid
+                        call get_interp_coeffs(z, r, ray%q_mid, a, b)
+                        N2_mid = a * N2_col(ray%q_mid) + b * N2_col(ray%q_mid + 1)
+                        G2_mid = a * G2_col(ray%q_mid) + b * G2_col(ray%q_mid + 1)
+
+                        call get_omega_hat_sq(wvn_hor_sq, m2, N2_mid, f2(j), &
+                            G2_mid, K2pG2_inv, omega_hat_sq)
 
                         dG2_mid = a * dG2_dr(ray%q_mid) + b * dG2_dr(ray%q_mid + 1)
                         dN2_mid = a * dN2_dr(ray%q_mid) + b * dN2_dr(ray%q_mid + 1)
@@ -111,11 +115,10 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
                         dv_mid = a * dv_dr(ray%q_mid) + b * dv_dr(ray%q_mid + 1)
 
                         incs(stage)%m = -dt * ( &
-                            ray%k * du_mid + ray%l * dv_mid + &
-                            ( &
+                            ray%k * du_mid + ray%l * dv_mid + ( &
                                 wvn_hor_sq * dN2_mid + &
-                                (f2(j) - omega_hat ** 2) * dG2_mid &
-                            ) / (2 * omega_hat * (wvn_hor_sq + wvn_ver_sq)) &
+                                (f2(j) - omega_hat_sq) * dG2_mid &
+                            ) * 0.5 * K2pG2_inv / sqrt(omega_hat_sq) &
                         )
 
                     else
@@ -171,9 +174,9 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt, rays)
                 N2_mid = a * N2_col(ray%q_mid) + b * N2_col(ray%q_mid + 1)
                 G2_mid = a * G2_col(ray%q_mid) + b * G2_col(ray%q_mid + 1)
 
-                ray%cg_r = get_cg_r(ray, N2_mid, f2(j), G2_mid)
-                ray%omega_hat = get_omega_hat(ray, N2_mid, f2(j), G2_mid)
                 ray%G2 = G2_mid
+                call get_cg_r(ray%m, wvn_hor_sq, ray%m ** 2, N2_mid, f2(j), &
+                    G2_mid, ray%omega_hat, ray%cg_r)
 
                 end associate
 

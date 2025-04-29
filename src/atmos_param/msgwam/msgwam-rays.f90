@@ -8,23 +8,14 @@ module msgwam_rays_mod
 implicit none
 private
 
-public delete_ray, get_cg_r, get_dm, get_m, get_omega_hat, t_ray
+public delete_ray, get_cg_r, get_dm, get_m, &
+       get_omega_hat_sq, t_ray
 
 type :: t_ray
     real :: r_hi, r_lo, k, l, m, dm, dens, cg_r, omega_hat, G2
     integer :: age, meta, q_hi, q_lo, q_mid
     logical :: is_ghost
 end type t_ray
-
-interface get_cg_r
-    module procedure get_cg_r_from_ray
-    module procedure get_cg_r_from_reals
-end interface get_cg_r
-
-interface get_omega_hat
-    module procedure get_omega_hat_from_ray
-    module procedure get_omega_hat_from_reals
-end interface get_omega_hat
 
 contains
 
@@ -61,42 +52,29 @@ pure subroutine delete_ray(ray)
 
 end subroutine delete_ray
 
-pure function get_cg_r_from_ray(ray, N2, f2, G2) result(cg_r)
+pure subroutine get_cg_r(m, wvn_hor_sq, m2, N2, f2, G2, &
+    omega_hat, cg_r)
 
     ! --------------------------------------------------------------------------
-    ! arguments and result
+    ! arguments
     ! --------------------------------------------------------------------------
-    type(t_ray), intent(in) :: ray
-    real,        intent(in) :: N2, f2, G2
-    real                    :: cg_r
-
-    ! --------------------------------------------------------------------------
-
-    cg_r = get_cg_r_from_reals(ray%k, ray%l, ray%m, N2, f2, G2)
-
-end function get_cg_r_from_ray
-
-pure function get_cg_r_from_reals(k, l, m, N2, f2, G2) result(cg_r)
-
-    ! --------------------------------------------------------------------------
-    ! arguments and result
-    ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, m, N2, f2, G2
-    real             :: cg_r
+    real, intent(in)  :: m, wvn_hor_sq, m2, N2, f2, G2
+    real, intent(out) :: omega_hat, cg_r
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    real :: omega_hat, wvn_sq
+    real :: omega_hat_sq, K2pG2_inv
 
     ! --------------------------------------------------------------------------
 
-    wvn_sq = k ** 2 + l ** 2 + m ** 2 + G2
-    omega_hat = get_omega_hat(k, l, m, N2, f2, G2)
+    K2pG2_inv = 1. / (wvn_hor_sq + m2 + G2)
+    omega_hat_sq = (N2 * wvn_hor_sq + f2 * (m2 + G2)) * K2pG2_inv
+    
+    omega_hat = sqrt(omega_hat_sq)
+    cg_r = m * (f2 - omega_hat_sq) * K2pG2_inv / omega_hat
 
-    cg_r = -m * (omega_hat ** 2 - f2) / (omega_hat * wvn_sq)
-
-end function get_cg_r_from_reals
+end subroutine get_cg_r
 
 pure function get_dm(m, dc, N2) result(dm)
 
@@ -112,12 +90,12 @@ pure function get_dm(m, dc, N2) result(dm)
 
 end function get_dm
 
-pure function get_m(k, l, omega_hat_sq, N2, f2, G2) result(m)
+pure function get_m(k, l, omega_hat_sq, N2, f2) result(m)
 
     ! --------------------------------------------------------------------------
     ! arguments and result
     ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, omega_hat_sq, N2, f2, G2
+    real, intent(in) :: k, l, omega_hat_sq, N2, f2
     real             :: m
 
     ! --------------------------------------------------------------------------
@@ -129,44 +107,20 @@ pure function get_m(k, l, omega_hat_sq, N2, f2, G2) result(m)
 
 end function get_m
 
-pure function get_omega_hat_from_ray(ray, N2, f2, G2) result(omega_hat)
+pure subroutine get_omega_hat_sq(wvn_hor_sq, m2, N2, f2, G2, &
+    K2pG2_inv, omega_hat_sq)
 
     ! --------------------------------------------------------------------------
-    ! arguments and result
+    ! arguments
     ! --------------------------------------------------------------------------
-    type(t_ray), intent(in) :: ray
-    real,        intent(in) :: N2, f2, G2
-    real                    :: omega_hat
-
-    ! --------------------------------------------------------------------------
-    
-    omega_hat = get_omega_hat_from_reals(ray%k, ray%l, ray%m, N2, f2, G2)
-
-end function get_omega_hat_from_ray
-
-pure function get_omega_hat_from_reals(k, l, m, N2, f2, G2) result(omega_hat)
+    real, intent(in)  :: wvn_hor_sq, m2, N2, f2, G2
+    real, intent(out) :: K2pG2_inv, omega_hat_sq
 
     ! --------------------------------------------------------------------------
-    ! arguments and result
-    ! --------------------------------------------------------------------------
-    real, intent(in) :: k, l, m, N2, f2, G2
-    real             :: omega_hat
 
-    ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    real :: wvn_hor_sq, wvn_ver_sq
+    K2pG2_inv = 1. / (wvn_hor_sq + m2 + G2)
+    omega_hat_sq = (N2 * wvn_hor_sq + f2 * (m2 + G2)) * K2pG2_inv
 
-    ! --------------------------------------------------------------------------
-    
-    wvn_hor_sq = k ** 2 + l ** 2
-    wvn_ver_sq = m ** 2 + G2
-
-    omega_hat = sqrt( &
-        (N2 * wvn_hor_sq + f2 * wvn_ver_sq) / &
-        (wvn_hor_sq + wvn_ver_sq) &
-    )
-
-end function get_omega_hat_from_reals
+end subroutine get_omega_hat_sq
 
 end module msgwam_rays_mod
