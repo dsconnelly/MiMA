@@ -109,7 +109,7 @@ contains
 
 end subroutine apply_breaking
 
-pure subroutine apply_dissipation(z_centers, rho, dt, rays)
+ subroutine apply_dissipation(z_centers, rho, dt, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -123,7 +123,7 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n
-    real :: a, b, damping, dz_inv, nu, r, sponge, wvn_sq
+    real :: a, b, damping, dz_inv, nu, r, sponge, wvn_sq, z_top
 
     ! --------------------------------------------------------------------------
 
@@ -133,14 +133,16 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
 
     do j = 1, j_max
         do i = 1, i_max
+
+            if (n_sponge > 0) then
+                z_top = z_centers(0, i, j)
+                dz_inv = 1. / (z_top - z_centers(n_sponge, i, j))
+            end if
+
             associate( &
                 z_col => z_centers(1:q_max, i, j), &
                 nu_col => mu / rho(:, i, j) &
             )
-
-                if (n_sponge > 1) then
-                    dz_inv = 1. / (z_col(1) - z_col(n_sponge))
-                end if
 
                 do n = 1, n_max
                     if (rays(n, i, j)%meta == -1) then
@@ -157,9 +159,10 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
                         damping = exp(-dt * nu * wvn_sq * ( &
                             1 + f2(j) / ray%omega_hat ** 2))
 
-                        if (n_sponge > 1) then
-                            sponge = max(min((z_col(1) - r) * dz_inv, 1.), 0.)
-                            damping = damping * sponge
+                        if (n_sponge > 0) then
+                            sponge = (z_top - ray%r_hi) * dz_inv
+                            sponge = max(min(sponge, 1.), 0.)
+                            damping = min(damping, sponge)
                         end if
 
                         ray%dens = ray%dens * damping

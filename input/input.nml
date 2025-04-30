@@ -226,6 +226,7 @@
 # domain decompositions, and number of processors used.
 
 &fms_nml
+    clock_grain        = 'ROUTINE',
     domains_stack_size = 600000 /
 
  &fms_io_nml

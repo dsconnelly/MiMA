@@ -83,7 +83,7 @@ def plot_qbo(fname: str) -> None:
     fig.set_size_inches(sum(widths), 3)
 
     with _open_dataset(fname) as ds:
-        spunup = ds['time.year'] > 4
+        spunup = ds['time.year'] > 2
         tropics = abs(ds['lat']) <= 15
 
         ds = ds.isel(
