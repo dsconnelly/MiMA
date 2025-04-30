@@ -49,7 +49,6 @@ integer, dimension(5) :: clocks
 ! mean state variables
 ! ==============================================================================
 
-real, dimension(:, :), allocatable    :: sponge_x, sponge_y
 real, dimension(:, :, :), allocatable :: flux_x, flux_y, rho, N2, G2, u_bar, &
                                          v_bar, z_centers, z_faces
 
@@ -123,9 +122,6 @@ subroutine msgwam_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(ghosts(n_source, i_max, j_max))
     allocate(last_meta(i_max, j_max))
 
-    allocate(sponge_x(i_max, j_max))
-    allocate(sponge_y(i_max, j_max))
-
     call init_source(p_ref)
     call init_clocks(clocks)
     call init_nc_output(axes, Time)
@@ -180,8 +176,7 @@ subroutine msgwam_calc(i_start, j_start, lat, &
 
     call apply_dissipation(z_centers, rho, dt_rays, rays)
     call apply_breaking(z_faces, rho, rays)
-    call check_boundaries(dt, z_centers, z_faces, rho, rays, &
-        sponge_x, sponge_y)
+    call check_boundaries(dt, z_centers, rays)
 
     call mpp_clock_end(clocks(3))
     call track_ray(rays, 4)
@@ -195,8 +190,7 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     call mpp_clock_begin(clocks(5))
 
     call project_fluxes(z_centers, rays, flux_x, flux_y)
-    call get_accelerations(z_faces, rho, flux_x, flux_y, &
-        sponge_x, sponge_y, du_dt, dv_dt)
+    call get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
 
     call mpp_clock_end(clocks(5))
     call track_ray(rays, 6)

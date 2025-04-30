@@ -1,6 +1,6 @@
 &coupler_nml
    days   = 360,
-   dt_atmos =360,
+   dt_atmos =240,
    current_date = 0001,1,1,0,0,0
    calendar = 'thirty_day' /
 
@@ -120,10 +120,11 @@
     mu                 = 1.e-3,
     n_max              = 250,
     n_source           = 24,
+    n_sponge           = 3,
     source_pressure    = 300.e+2,
     T_hat_source       = 36000.,
     use_shapiro_filter = .true.,
-    H_rho              = 8.e+3 /
+    debug_mode         = 0 /
 
  &ad99_nml
      Bt_0  = 0.0043,  

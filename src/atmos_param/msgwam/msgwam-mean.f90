@@ -7,7 +7,7 @@ module msgwam_mean_mod
 
 use constants_mod,        only: CP_AIR, GRAV, RDGAS
 
-use msgwam_constants_mod, only: i_max, j_max, min_N2, n_max, n_sponge, q_max, &
+use msgwam_constants_mod, only: i_max, j_max, min_N2, n_max, q_max, &
                                 use_shapiro_filter
 use msgwam_rays_mod,      only: t_ray
 use msgwam_utils_mod,     only: shapiro_filter
@@ -20,8 +20,7 @@ public get_accelerations, project_fluxes, update_mean_fields, &
 
 contains
 
-pure subroutine get_accelerations(z_faces, rho, flux_x, flux_y, &
-    sponge_x, sponge_y, du_dt, dv_dt)
+pure subroutine get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -29,7 +28,6 @@ pure subroutine get_accelerations(z_faces, rho, flux_x, flux_y, &
     real, dimension(q_max + 1, i_max, j_max), intent(in)  :: z_faces
     real, dimension(q_max, i_max, j_max),     intent(in)  :: rho
     real, dimension(q_max + 1, i_max, j_max), intent(in)  :: flux_x, flux_y
-    real, dimension(i_max, j_max),            intent(in)  :: sponge_x, sponge_y
     real, dimension(i_max, j_max, q_max),     intent(out) :: du_dt, dv_dt
 
     ! --------------------------------------------------------------------------
@@ -50,14 +48,6 @@ pure subroutine get_accelerations(z_faces, rho, flux_x, flux_y, &
                 du_dt(i, j, q) = -dFx_dz / rho(q, i, j)
                 dv_dt(i, j, q) = -dFy_dz / rho(q, i, j)
             end do
-
-            if (n_sponge > 0) then
-                do q = 1, n_sponge
-                    du_dt(i, j, q) = du_dt(i, j, q) + sponge_x(i, j)
-                    dv_dt(i, j, q) = dv_dt(i, j, q) + sponge_y(i, j)
-                end do
-            end if
-
         end do
     end do
 

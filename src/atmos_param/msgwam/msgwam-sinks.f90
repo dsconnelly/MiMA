@@ -123,7 +123,7 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n
-    real :: a, b, damping, nu, r, wvn_sq
+    real :: a, b, damping, dz_inv, nu, r, sponge, wvn_sq
 
     ! --------------------------------------------------------------------------
 
@@ -138,6 +138,10 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
                 nu_col => mu / rho(:, i, j) &
             )
 
+                if (n_sponge > 1) then
+                    dz_inv = 1. / (z_col(1) - z_col(n_sponge))
+                end if
+
                 do n = 1, n_max
                     if (rays(n, i, j)%meta == -1) then
                         cycle
@@ -150,8 +154,15 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
                         call get_interp_coeffs(z_col, r, ray%q_mid, a, b)
                         nu = a * nu_col(ray%q_mid) + b * nu_col(ray%q_mid + 1)
 
-                        damping = nu * wvn_sq * (1 + f2(j) / ray%omega_hat ** 2)
-                        ray%dens = ray%dens * exp(-dt * damping)
+                        damping = exp(-dt * nu * wvn_sq * ( &
+                            1 + f2(j) / ray%omega_hat ** 2))
+
+                        if (n_sponge > 1) then
+                            sponge = max(min((z_col(1) - r) * dz_inv, 1.), 0.)
+                            damping = damping * sponge
+                        end if
+
+                        ray%dens = ray%dens * damping
                     end associate
                 end do
 
@@ -161,33 +172,23 @@ pure subroutine apply_dissipation(z_centers, rho, dt, rays)
 
 end subroutine apply_dissipation
 
- subroutine check_boundaries(dt, z_centers, z_faces, rho, rays, &
-    sponge_x, sponge_y)
+pure subroutine check_boundaries(dt, z_centers, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real,                                        intent(in)    :: dt
     real, dimension(0:q_max + 1, i_max, j_max),  intent(in)    :: z_centers
-    real, dimension(q_max + 1, i_max, j_max),    intent(in)    :: z_faces
-    real, dimension(q_max, i_max, j_max),        intent(in)    :: rho
     type(t_ray), dimension(n_max, i_max, j_max), intent(inout) :: rays
-    real, dimension(i_max, j_max),               intent(out)   :: sponge_x, &
-                                                                  sponge_y
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    logical :: above, delete
+    logical :: delete
     integer :: i, j, n
-    real :: avail, flux, wvn, z_hi, z_lo
-    real, dimension(n_sponge, i_max, j_max) :: dz
-    real, dimension(i_max, j_max) :: prefactor
+    real :: flux, wvn, z_hi, z_lo
 
     ! --------------------------------------------------------------------------
-
-    sponge_x = 0.
-    sponge_y = 0.
 
     do j = 1, j_max
         do i = 1, i_max
@@ -203,17 +204,10 @@ end subroutine apply_dissipation
                     wvn = sqrt(ray%k ** 2 + ray%l ** 2)
                     flux = wvn * ray%dens * ray%dm * ray%cg_r
 
-                    above = ray%r_lo > z_hi
-                    delete = above .or. (ray%r_hi < z_lo)
+                    delete = ray%r_lo > z_hi
+                    delete = delete .or. (ray%r_hi < z_lo)
                     delete = delete .or. (abs(flux) < min_flux)
                     delete = delete .or. (ray%age > max_age)
-
-                    if (above .and. n_sponge > 0) then
-                        avail = ray%dens * ray%dm * (ray%r_hi - ray%r_lo)
-                        sponge_x(i, j) = sponge_x(i, j) + ray%k * avail
-                        sponge_y(i, j) = sponge_y(i, j) + ray%l * avail
-                    end if
-
                 end associate
 
                 if (delete) then
@@ -223,14 +217,6 @@ end subroutine apply_dissipation
 
         end do
     end do
-
-    if (n_sponge > 0) then
-        dz = z_faces(1:n_sponge, :, :) - z_faces(2:(n_sponge + 1), :, :)
-        prefactor = 1 / sum(dt * dz * rho(1:n_sponge, :, :), dim=1)
-
-        sponge_x = prefactor * sponge_x
-        sponge_y = prefactor * sponge_y
-    end if
 
 end subroutine check_boundaries
 
