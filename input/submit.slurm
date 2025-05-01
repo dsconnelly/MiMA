@@ -1,7 +1,7 @@
 #!/bin/bash -e
 
-#SBATCH --nodes=8
-#SBATCH --ntasks-per-node=4
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=16
 #SBATCH --time=2:00:00
 #SBATCH --mem=64G
 #SBATCH --job-name=RUN_NAME

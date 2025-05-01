@@ -109,12 +109,13 @@ contains
 
 end subroutine apply_breaking
 
- subroutine apply_dissipation(z_centers, rho, dt, rays)
+pure subroutine apply_dissipation(z_centers, z_faces, rho, dt, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(0:q_max + 1, i_max, j_max),  intent(in)    :: z_centers
+    real, dimension(q_max + 1, i_max, j_max),    intent(in)    :: z_faces
     real, dimension(q_max, i_max, j_max),        intent(in)    :: rho
     real,                                        intent(in)    :: dt
     type(t_ray), dimension(n_max, i_max, j_max), intent(inout) :: rays
@@ -123,7 +124,7 @@ end subroutine apply_breaking
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n
-    real :: a, b, damping, dz_inv, nu, r, sponge, wvn_sq, z_top
+    real :: a, b, damping, dz_inv, nu, r, sponge, wvn_sq, z_sponge, z_zero
 
     ! --------------------------------------------------------------------------
 
@@ -135,8 +136,8 @@ end subroutine apply_breaking
         do i = 1, i_max
 
             if (n_sponge > 0) then
-                z_top = z_centers(0, i, j)
-                dz_inv = 1. / (z_top - z_centers(n_sponge, i, j))
+                z_zero = z_faces(1, i, j)
+                z_sponge = z_faces(n_sponge + 1, i, j)
             end if
 
             associate( &
@@ -151,18 +152,19 @@ end subroutine apply_breaking
 
                     associate (ray => rays(n, i, j))
                         r = (ray%r_lo + ray%r_hi) / 2.
-                        wvn_sq = ray%k ** 2 + ray%l ** 2 + ray%m ** 2 + ray%G2
 
-                        call get_interp_coeffs(z_col, r, ray%q_mid, a, b)
-                        nu = a * nu_col(ray%q_mid) + b * nu_col(ray%q_mid + 1)
+                        if (n_sponge > 0 .and. r > z_sponge) then
+                            damping = 1 - ray%cg_r * dt / (z_zero - r)
+                            damping = min(max(damping, 0.), 1.)
 
-                        damping = exp(-dt * nu * wvn_sq * ( &
-                            1 + f2(j) / ray%omega_hat ** 2))
+                        else
+                            call get_interp_coeffs(z_col, r, ray%q_mid, a, b)
+                            nu = a * nu_col(ray%q_mid) + b * nu_col(ray%q_mid + 1)
+                            wvn_sq = ray%k ** 2 + ray%l ** 2 + ray%m ** 2 + ray%G2
 
-                        if (n_sponge > 0) then
-                            sponge = (z_top - ray%r_hi) * dz_inv
-                            sponge = max(min(sponge, 1.), 0.)
-                            damping = min(damping, sponge)
+                            damping = exp(-dt * nu * wvn_sq * ( &
+                                1 + f2(j) / ray%omega_hat ** 2))
+
                         end if
 
                         ray%dens = ray%dens * damping
