@@ -68,8 +68,7 @@ pure subroutine get_cg_r(m, wvn_hor_sq, m2, N2, f2, G2, &
 
     ! --------------------------------------------------------------------------
 
-    K2pG2_inv = 1. / (wvn_hor_sq + m2 + G2)
-    omega_hat_sq = (N2 * wvn_hor_sq + f2 * (m2 + G2)) * K2pG2_inv
+    call get_omega_hat_sq(wvn_hor_sq, m2, N2, f2, G2, K2pG2_inv, omega_hat_sq)
     
     omega_hat = sqrt(omega_hat_sq)
     cg_r = m * (f2 - omega_hat_sq) * K2pG2_inv / omega_hat

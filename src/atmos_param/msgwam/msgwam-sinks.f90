@@ -16,7 +16,7 @@ public apply_breaking, apply_dissipation, check_boundaries
 
 contains
 
- subroutine apply_breaking(z_faces, rho, rays)
+pure subroutine apply_breaking(z_faces, rho, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -124,7 +124,8 @@ pure subroutine apply_dissipation(z_centers, z_faces, rho, dt, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n
-    real :: a, b, damping, dz_inv, nu, r, sponge, wvn_sq, z_sponge, z_zero
+    real :: a, b, damping, nu, r, sponge, wvn_sq, z_sponge, z_zero
+    real, dimension(q_max - 1) :: dz_inv
 
     ! --------------------------------------------------------------------------
 
@@ -145,6 +146,8 @@ pure subroutine apply_dissipation(z_centers, z_faces, rho, dt, rays)
                 nu_col => mu / rho(:, i, j) &
             )
 
+                dz_inv = 1. / (z_col(:q_max - 1) - z_col(2:))
+
                 do n = 1, n_max
                     if (rays(n, i, j)%meta == -1) then
                         cycle
@@ -158,10 +161,10 @@ pure subroutine apply_dissipation(z_centers, z_faces, rho, dt, rays)
                             damping = min(max(damping, 0.), 1.)
 
                         else
-                            call get_interp_coeffs(z_col, r, ray%q_mid, a, b)
-                            nu = a * nu_col(ray%q_mid) + b * nu_col(ray%q_mid + 1)
                             wvn_sq = ray%k ** 2 + ray%l ** 2 + ray%m ** 2 + ray%G2
-
+                            call get_interp_coeffs(z_col, dz_inv, r, ray%q_mid, a, b)
+                            nu = a * nu_col(ray%q_mid) + b * nu_col(ray%q_mid + 1)
+                            
                             damping = exp(-dt * nu * wvn_sq * ( &
                                 1 + f2(j) / ray%omega_hat ** 2))
 

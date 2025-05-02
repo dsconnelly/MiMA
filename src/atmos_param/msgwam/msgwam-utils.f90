@@ -13,34 +13,27 @@ public get_interp_coeffs, locate, shapiro_filter
 
 contains
 
-pure subroutine get_interp_coeffs(z, r, q, a, b)
+pure subroutine get_interp_coeffs(z, dz_inv, r, q, a, b)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     real, dimension(q_max),     intent(in)  :: z
+    real, dimension(q_max - 1), intent(in)  :: dz_inv
     real,                       intent(in)  :: r
     integer,                    intent(in)  :: q
     real,                       intent(out) :: a, b
 
     ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    logical :: above, below
-    real :: s
 
-    ! --------------------------------------------------------------------------
-
-    above = r > z(1)
-    below = r < z(q_max)
-
-    s = (r - z(q + 1)) / (z(q) - z(q + 1))
-    a = merge(1., merge(0., s, below), above)
+    a = (r - z(q + 1)) * dz_inv(q)
+    a = merge(0., a, r < z(q_max))
+    a = merge(1., a, r > z(1))
     b = 1. - a
 
 end subroutine get_interp_coeffs
 
-pure function locate(r, z, q_guess) result(q)
+pure function locate(z, r, q_guess) result(q)
 
     ! --------------------------------------------------------------------------
     ! arguments and result

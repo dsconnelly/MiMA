@@ -243,6 +243,8 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
     integer :: dir, i, j, n, q_hi, q_lo, q_mid, s
     real :: a, b, cg, cp, flux, G2_source, k, l, m, mag_cp_hat, mag_wvn_hor, &
             omega_hat, N2_source, prob, r, r_lo, r_hi, total, u, v
+
+    real, dimension(q_max - 1) :: dz_inv
     real, dimension(n_source, i_max, j_max) :: rand
 
     ! --------------------------------------------------------------------------
@@ -260,11 +262,12 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                 N2_col => N2(:, i, j), &
                 G2_col => G2(:, i, j) &
             )
-                q_hi = locate(r_hi, z, q_source)
-                q_lo = locate(r_lo, z, q_source)
-                q_mid = locate(r, z, q_source)
+                q_hi = locate(z, r_hi, q_source)
+                q_lo = locate(z, r_lo, q_source)
+                q_mid = locate(z, r, q_source)
 
-                call get_interp_coeffs(z, r, q_mid, a, b)
+                dz_inv = 1. / (z(:q_max - 1) - z(2:))
+                call get_interp_coeffs(z, dz_inv, r, q_mid, a, b)
                 N2_source = a * N2_col(q_mid) + b * N2_col(q_mid + 1)
                 G2_source = a * G2_col(q_mid) + b * G2_col(q_mid + 1)
             end associate
