@@ -31,7 +31,7 @@ def plot_climatology(fname: str, season: Optional[str]=None) -> None:
             caxes.append(fig.add_subplot(spec[i, 2 * j + 1]))
 
     with _open_dataset(fname) as ds:
-        keep = ds['time.year'] > 2
+        keep = ds['time.year'] > 1
         if season is not None:
             keep = keep & (ds['time.season'] == season)
             
@@ -74,6 +74,63 @@ def plot_climatology(fname: str, season: Optional[str]=None) -> None:
     suffix = season if season else 'annual'
     oname = fname.split('.')[0] + f'-clim-{suffix}.png'
     plt.savefig(oname, dpi=400)
+
+def plot_pruning(fname: str) -> None:
+    """Plot pruning as a function of time."""
+
+    n_days, dt = 360, 240
+    dt_resample = 3 * 3600
+    n_steps = 360 * int(n_days)
+
+    ns = np.zeros((32, n_steps))
+    ages = np.zeros((32, n_steps))
+    j = np.zeros(32).astype(int)
+
+    with open(fname) as f:
+        for line in f:
+            if not 'pruned' in line:
+                continue
+
+            pe, *parts = line.split()
+            pe = int(pe)
+
+            if 'nothing' in line:
+                j[pe] = j[pe] + 1
+                continue
+
+            ns[pe, j[pe]] = float(parts[1])
+            ages[pe, j[pe]] = float(parts[6])
+            j[pe] = j[pe] + 1
+
+    n_resample = dt_resample // dt
+    ages = ages.reshape(32, -1, n_resample)
+    ns = ns.reshape(32, -1, n_resample)
+
+    ages = _weighted_mean(ages, ns, axis=2)
+    ns = ns.sum(axis=2)
+
+    ages = _weighted_mean(ages, ns, axis=0)
+    ns = ns.mean(axis=0)
+
+    fig, axes = plt.subplots(ncols=2)
+    fig.set_size_inches(9, 3)
+
+    days = np.linspace(0, n_days, len(ns))
+    axes[1].plot(days, ages / 86400, color='k')
+    axes[0].plot(days, ns, color='k')
+
+    for ax in axes:
+        ax.set_xlim(days.min(), days.max())
+        ax.set_xlabel('integration day')
+
+    axes[0].set_ylim(0, 20)
+    axes[1].set_ylim(0, 3)
+
+    axes[0].set_ylabel(f'prunes per {dt_resample // 3600} hours')
+    axes[1].set_ylabel('age of pruned rays (days)')
+
+    plt.tight_layout()
+    plt.savefig('pruning.png', dpi=400)
 
 def plot_qbo(fname: str) -> None:
     """Plot the QBO wind from a MiMA run."""
@@ -144,6 +201,17 @@ def _open_dataset(fname: str) -> xr.Dataset:
 
         return ds
     
+def _weighted_mean(a: np.ndarray, w: np.ndarray, axis: int) -> np.ndarray:
+    """Take a weighted mean along a given axis."""
+
+    w_sum = w.sum(axis=axis)
+    
+    return np.divide(
+        (a * w).sum(axis=axis), w_sum,
+        out = np.zeros_like(w_sum),
+        where=(w_sum > 0)
+    )
+
 if __name__ == '__main__':
     task, *args = sys.argv[1:]
     func = globals()[f'plot_{task}']

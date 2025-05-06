@@ -7,7 +7,7 @@ module msgwam_mean_mod
 
 use constants_mod,        only: CP_AIR, GRAV, RDGAS
 
-use msgwam_constants_mod, only: i_max, j_max, min_N2, n_max, q_max, &
+use msgwam_constants_mod, only: epsilon, i_max, j_max, min_N2, n_max, q_max, &
                                 use_shapiro_filter
 use msgwam_rays_mod,      only: t_ray
 use msgwam_utils_mod,     only: shapiro_filter
@@ -66,12 +66,13 @@ pure subroutine project_fluxes(z_centers, rays, flux_x, flux_y)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n, q
-    real :: aflux, dz, frac, z_hi, z_lo
+    real :: aflux, dz, frac, z_hi, z_lo, one_on_epsilon
 
     ! --------------------------------------------------------------------------
 
     flux_x = 0.
     flux_y = 0.
+    one_on_epsilon = 1. / epsilon
 
     do j = 1, j_max
         do i = 1, i_max
@@ -82,7 +83,7 @@ pure subroutine project_fluxes(z_centers, rays, flux_x, flux_y)
                 end if
 
                 associate(ray => rays(n, i, j))
-                    aflux = ray%dens * ray%dm * ray%cg_r
+                    aflux = ray%dens * ray%dm * ray%cg_r * one_on_epsilon
 
                     do q = ray%q_hi, ray%q_lo + 2
                         z_hi = z_centers(q - 1, i, j)

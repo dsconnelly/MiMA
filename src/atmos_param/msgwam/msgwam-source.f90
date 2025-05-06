@@ -6,12 +6,12 @@ module msgwam_source_mod
 ! ==============================================================================
 
 use constants_mod,        only: PI
-use fms_mod,              only: error_mesg, FATAL
+use fms_mod,              only: error_mesg, FATAL, mpp_pe
 
 use msgwam_constants_mod, only: boundary_flux, cp_max, cp_width, dr_source, &
                                 epsilon, f2, i_max, j_max, is_extrinsic, &
-                                n_max, n_source, q_max, source_pressure, &
-                                T_hat_source
+                                n_max, n_source, print_prune_diag, q_max, &
+                                source_pressure, T_hat_source
 use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
@@ -190,7 +190,7 @@ subroutine init_source(p_ref)
 
 end subroutine init_source
 
-pure subroutine prune(n_excess, rays)
+subroutine prune(n_excess, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -203,19 +203,42 @@ pure subroutine prune(n_excess, rays)
     ! --------------------------------------------------------------------------
     integer :: i, j, n
     integer, dimension(:, :, :), allocatable :: idx
+    real :: avg_age, n_deleted
 
     ! --------------------------------------------------------------------------
 
     allocate(idx(maxval(n_excess), i_max, j_max))
     call find_lowest_energies(n_excess, rays, idx)
 
+    if (print_prune_diag) then
+        n_deleted = 0.
+        avg_age = 0.
+    end if
+
     do j = 1, j_max
         do i = 1, i_max
             do n = 1, n_excess(i, j)
+                if (print_prune_diag) then
+                    n_deleted = n_deleted + 1.
+                    avg_age = avg_age + rays(idx(n, i, j), i, j)%age
+                end if
+
                 call delete_ray(rays(idx(n, i, j), i, j))
             end do
         end do
     end do
+
+    if (print_prune_diag) then
+        if (n_deleted > 0) then
+            avg_age = avg_age / n_deleted
+            n_deleted = n_deleted / real(i_max * j_max)
+
+            write(*, "(I0, A, F20.6, A, F20.6)") mpp_pe (), " pruned ", &
+                n_deleted, " rays with average age ", avg_age
+        else
+            write(*, "(I0, A)") mpp_pe(), " pruned nothing"
+        end if        
+    end if
 
 end subroutine prune
 

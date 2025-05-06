@@ -51,7 +51,7 @@ pure subroutine apply_breaking(z_faces, rho, rays)
 
                 associate(ray => rays(n, i, j))
                     wvn_hor_sq = ray%k ** 2 + ray%l ** 2
-                    wvn_ver_sq = ray%m ** 2 + ray%G2
+                    wvn_ver_sq = ray%m ** 2
 
                     wvn_sq(n) = wvn_hor_sq + wvn_ver_sq
                     S = ray%dens * ray%dm * wvn_ver_sq * wvn_hor_sq / &

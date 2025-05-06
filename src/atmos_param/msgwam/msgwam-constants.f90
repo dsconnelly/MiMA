@@ -37,13 +37,14 @@ logical :: use_shapiro_filter = .true.
 
 ! These namelist parameters are for debugging only.
 integer               :: debug_mode = 0
+logical               :: print_prune_diag = .false.
 integer, dimension(5) :: track      = (/ 0, 1, 1, 1, 1/)
 
 namelist / msgwam_nml / &
     boundary_flux, break_waves, cp_max, cp_width, dr_min, dr_source, &
     epsilon, lat_extrinsic, max_age, min_flux, mu, n_max, n_source, n_sponge, &
     source_pressure, T_hat_source, use_shapiro_filter, &
-    debug_mode, track
+    debug_mode, print_prune_diag, track
 
 private :: lat_extrinsic, msgwam_nml
 
