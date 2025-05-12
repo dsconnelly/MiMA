@@ -8,9 +8,10 @@ module msgwam_source_mod
 use constants_mod,        only: PI
 use fms_mod,              only: error_mesg, FATAL, mpp_pe
 
-use msgwam_constants_mod, only: boundary_flux, cp_max, cp_width, dr_source, &
-                                epsilon, f2, i_max, j_max, is_extrinsic, &
-                                n_max, n_source, print_prune_diag, q_max, &
+use msgwam_constants_mod, only: boundary_flux_ex, boundary_flux_tr, cp_max, &
+                                cp_width_ex, cp_width_tr, dr_source, epsilon, &
+                                f2, i_max, j_max, lat_tropics, n_max, n_source, &
+                                print_prune_diag, q_max, source_dlat, &
                                 source_pressure, T_hat_source
 use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
@@ -23,7 +24,8 @@ public check_source, init_source
 logical :: is_stochastic
 integer :: n_per_dir, q_source
 real :: dc_source, omega_hat_source
-real, dimension(:), allocatable :: cp_source
+logical, dimension(:), allocatable :: is_extrinsic
+real, dimension(:), allocatable :: boundary_flux, cp_source, cp_width
 type(t_ray), dimension(:, :, :), allocatable :: launches
 
 real, dimension(4) :: COS_PHI = (/ 1., 0., -1., 0. /)
@@ -155,17 +157,19 @@ pure subroutine find_lowest_energies(n_find, rays, idx)
 
 end subroutine find_lowest_energies
 
-subroutine init_source(p_ref)
+subroutine init_source(p_ref, lat_bounds)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(q_max) :: p_ref
+    real, dimension(q_max)     :: p_ref
+    real, dimension(j_max + 1) :: lat_bounds
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: n, q
+    integer :: j, n, q
+    real :: arg, lat
 
     ! --------------------------------------------------------------------------
 
@@ -186,6 +190,19 @@ subroutine init_source(p_ref)
             q_source = q
             exit
         end if
+    end do
+
+    allocate(is_extrinsic(j_max))
+    allocate(boundary_flux(j_max))
+    allocate(cp_width(j_max))
+
+    do j = 1, j_max
+        lat = abs(90 * (lat_bounds(j) + lat_bounds(j + 1)) / PI)
+        arg = (lat - (lat_tropics - source_dlat)) / (2 * source_dlat)
+        arg = min(max(arg, 0.), 1.) 
+
+        boundary_flux(j) = boundary_flux_tr * (1 - arg) + boundary_flux_ex * arg
+        cp_width(j) = cp_width_tr * (1 - arg) + cp_width_ex * arg
     end do
 
 end subroutine init_source
@@ -264,8 +281,9 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
     ! --------------------------------------------------------------------------
     logical :: cleared
     integer :: dir, i, j, n, q_hi, q_lo, q_mid, s
-    real :: a, b, cg, cp, flux, G2_source, k, l, m, mag_cp_hat, mag_wvn_hor, &
-            omega_hat, N2_source, prob, r, r_lo, r_hi, total, u, v
+    real :: a, b, cg, cp, den, flux, G2_source, k, l, m, mag_cp_hat, &
+            mag_wvn_hor, omega_hat, N2_source, prob, r, r_lo, r_hi, scale_x, &
+            scale_y, u, v
 
     real, dimension(q_max - 1) :: dz_inv
     real, dimension(n_source, i_max, j_max) :: rand
@@ -295,7 +313,9 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                 G2_source = a * G2_col(q_mid) + b * G2_col(q_mid + 1)
             end associate
 
-            total = 0.
+            scale_x = 0.
+            scale_y = 0.
+
             do dir = 1, 4
                 do n = 1, n_per_dir
 
@@ -317,12 +337,17 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                     mag_cp_hat = cp - COS_PHI(dir) * u - SIN_PHI(dir) * v
 
                     if (is_extrinsic(j)) then
-                        flux = exp(-0.5 * ((cp / cp_width) ** 2))
+                        flux = exp(-0.5 * ((cp / cp_width(j)) ** 2))
                     else
-                        flux = exp(-0.5 * ((mag_cp_hat / cp_width) ** 2))
+                        flux = exp(-0.5 * ((mag_cp_hat / cp_width(j)) ** 2))
                     end if
 
-                    total = total + flux
+                    if (abs(COS_PHI(dir)) > 0.) then
+                        scale_x = scale_x + flux
+                    else
+                        scale_y = scale_y + flux
+                    end if
+
                     if (.not. cleared) then
                         cycle
                     end if
@@ -373,8 +398,23 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                 end do
             end do
 
-            launches(:, i, j)%dens = launches(:, i, j)%dens &
-                * 2 * boundary_flux / total
+            scale_x = boundary_flux(j) / scale_x
+            scale_y = boundary_flux(j) / scale_y
+
+            do dir = 1, 4
+                do n = 1, n_per_dir
+                    s = (dir - 1) * n_per_dir + n
+                    if (launches(s, i, j)%meta == -1) then
+                        cycle
+                    end if
+
+                    if (abs(COS_PHI(dir)) > 0.) then
+                        launches(s, i, j)%dens = launches(s, i, j)%dens * scale_x
+                    else
+                        launches(s, i, j)%dens = launches(s, i, j)%dens * scale_y
+                    end if
+                end do
+            end do
 
         end do
     end do

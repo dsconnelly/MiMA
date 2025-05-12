@@ -122,7 +122,7 @@ subroutine msgwam_init(lon_bounds, lat_bounds, p_ref, Time, axes)
     allocate(ghosts(n_source, i_max, j_max))
     allocate(last_meta(i_max, j_max))
 
-    call init_source(p_ref)
+    call init_source(p_ref, lat_bounds)
     call init_clocks(clocks)
     call init_nc_output(axes, Time)
     call init_ray_state(rays, ghosts, last_meta)

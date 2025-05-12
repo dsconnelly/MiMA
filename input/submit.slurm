@@ -2,7 +2,7 @@
 
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=16
-#SBATCH --time=2:00:00
+#SBATCH --time=15:00:00
 #SBATCH --mem=64G
 #SBATCH --job-name=RUN_NAME
 #SBATCH --out=RUN_DIR/slurm.out
@@ -33,3 +33,5 @@ for yy in {01..05}; do
     mv RESTART/* INPUT
     
 done
+
+cdo -timselmean,4 -mergetime ??/atmos_4xdaily.nc daily.nc

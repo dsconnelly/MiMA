@@ -1,8 +1,9 @@
 #!/bin/bash
 
 RUN_DIR="$1"
-mkdir -p "${RUN_DIR}/RESTART"
 MIMA_DIR="/home/dsc7746/MiMA"
+mkdir -p "${RUN_DIR}/RESTART"
+mkdir -p "${RUN_DIR}/plots
 
 cp -r "${MIMA_DIR}/input/"* "${RUN_DIR}"
 cp "${MIMA_DIR}/exp/exec.greene/mima.x" "${RUN_DIR}"
