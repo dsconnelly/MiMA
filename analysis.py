@@ -154,17 +154,22 @@ def plot_qbo(ds: xr.Dataset) -> None:
 
     tropics = abs(ds['lat']) <= 15
     ds = ds.isel(lat=tropics).mean(('lat', 'lon'))
+    u = ds[_get_uv_name(ds)]
 
     years = cftime.date2num(ds['time'].values, _UNITS, calendar=_CALENDAR) / 360
     y = np.log10(ds['pfull'].values)
     yticks, ylabels = _get_yticks()
     
     img = ax.pcolormesh(
-        years, y, ds[_get_uv_name(ds)].values.T,
+        years, y, u.values.T,
         vmin=-50, vmax=50,
         shading='nearest',
         cmap='RdBu_r'
     )
+
+    signal = u.sel(pfull=10, method='nearest').values
+    crossings = _get_zero_crossings(signal, years * 360) / 360
+    ax.scatter(crossings, np.ones_like(crossings), color='k', marker='x')
 
     n_years = int(years.max()) + 1
     ax.set_xticks(np.linspace(0, n_years, n_years + 1))
@@ -191,16 +196,16 @@ def show_statistics(ds: xr.Dataset) -> None:
 
     tropics = abs(ds['lat']) < 15
     u_qbo = u.isel(lat=tropics).mean(('lat', 'lon')).values
-    days = cftime.date2num(u_qbo['time'], _UNITS, calendar=_CALENDAR)
+    days = cftime.date2num(u['time'], _UNITS, calendar=_CALENDAR)
 
-    crossings = days[:-1][(u_qbo[:-1] > 0) & (u_qbo[1:] < 0)]
-    period = np.diff(_smooth_crossings(crossings)).mean() / 360
+    crossings = _get_zero_crossings(u_qbo, days)
+    period = np.diff(crossings).mean() / 360
     print(f'    QBO period is {period:.3f} years')
 
     for season in ['DJF', 'JJA']:
         keep = (ds['time.season'] == season)
         keep = keep & (ds['time.year'] > 1)
-        u_s = u_s.isel(time=keep)
+        u_s = u.isel(time=keep)
 
         sign = 1 if season == 'DJF' else -1
         u_s = u_s.sel(lat=(sign * 60), method='nearest')
@@ -222,6 +227,16 @@ def _get_yticks() -> tuple[np.ndarray, np.ndarray]:
 
     return ticks, np.array(labels)
 
+def _get_zero_crossings(u: np.ndarray, days: np.ndarray) -> np.ndarray:
+    """Get appropriately smoothed zero crossings from the QBO wind."""
+
+    u_hat = np.fft.rfft(u)
+    freqs = np.fft.rfftfreq(len(u), days[1] - days[0])
+    u_hat[freqs > 1 / 30] = 0
+    u = np.fft.irfft(u_hat)
+
+    return days[:-1][(u[:-1] > 0) & (u[1:] < 0)]
+
 def _open_dataset(fname: str) -> xr.Dataset:
     """Open a MiMA output file and parse the time dimension correctly."""
 
@@ -231,21 +246,6 @@ def _open_dataset(fname: str) -> xr.Dataset:
         ds['time'] = cftime.num2date(days, _UNITS, calendar=_CALENDAR)
 
     return ds
-
-def _smooth_crossings(crossings: np.ndarray) -> np.ndarray:
-    """Smooth an array of QBO crossings to remove noise."""
-
-    start, smoothed = 0, []
-    while start < len(crossings):
-        end = start + 1
-        while end < len(crossings):
-            if crossings[end] - crossings[start] > 30:
-                break
-
-        smoothed.append(crossings[start:end].mean())
-        start = end
-
-    return np.narray(smoothed)
 
 def _weighted_mean(a: np.ndarray, w: np.ndarray, axis: int) -> np.ndarray:
     """Take a weighted mean along a given axis."""
