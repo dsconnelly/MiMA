@@ -12,14 +12,14 @@ use msgwam_constants_mod, only: boundary_flux_ex, boundary_flux_tr, cp_max, &
                                 cp_width_ex, cp_width_tr, dr_source, epsilon, &
                                 f2, i_max, j_max, lat_tropics, n_max, n_source, &
                                 print_prune_diag, q_max, source_dlat, &
-                                source_pressure, T_hat_source
+                                source_pressure, steady_state, T_hat_source
 use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
 implicit none
 private
 
-public check_source, init_source
+public check_source, init_source, q_source, update_launches
 
 logical :: is_stochastic
 integer :: n_per_dir, q_source
@@ -201,6 +201,7 @@ subroutine init_source(p_ref, lat_bounds)
         arg = (lat - (lat_tropics - source_dlat)) / (2 * source_dlat)
         arg = min(max(arg, 0.), 1.) 
 
+        is_extrinsic(j) = lat > lat_tropics
         boundary_flux(j) = boundary_flux_tr * (1 - arg) + boundary_flux_ex * arg
         cp_width(j) = cp_width_tr * (1 - arg) + cp_width_ex * arg
     end do
@@ -322,7 +323,7 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                     s = (dir - 1) * n_per_dir + n
                     cleared = .true.
 
-                    if (.not. is_stochastic) then
+                    if (.not. (is_stochastic .or. steady_state)) then
                         if (ghosts(s, i, j) > 0) then
                             if (rays(ghosts(s, i, j), i, j)%r_lo < r_hi) then
                                 launches(s, i, j)%meta = -1

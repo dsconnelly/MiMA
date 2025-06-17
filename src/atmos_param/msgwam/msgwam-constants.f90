@@ -36,6 +36,7 @@ integer :: n_source           = 48
 integer :: n_sponge           = 3
 real    :: source_dlat        = 5.
 real    :: source_pressure    = 300.e2
+logical :: steady_state       = .false.
 real    :: T_hat_source       = 10. * 3600
 logical :: use_shapiro_filter = .true.
 
@@ -48,7 +49,8 @@ namelist / msgwam_nml / &
     boundary_flux_ex, boundary_flux_tr, break_waves, cp_max, cp_width_ex, &
     cp_width_tr, dr_max, dr_min, dr_source, epsilon, lat_tropics, max_age, &
     min_flux, mu, n_max, n_source, n_sponge, source_dlat, source_pressure, &
-    T_hat_source, use_shapiro_filter, debug_mode, print_prune_diag, track
+    steady_state, T_hat_source, use_shapiro_filter, debug_mode, &
+    print_prune_diag, track
 
 private :: msgwam_nml
 

@@ -9,7 +9,8 @@ use diag_manager_mod,     only: register_diag_field, send_data
 use fms_mod,              only: error_mesg, FATAL, mpp_pe
 use time_manager_mod,     only: time_type
 
-use msgwam_constants_mod, only: i_max, j_max, n_max, n_source, q_max
+use msgwam_constants_mod, only: i_max, j_max, n_max, n_source, q_max, &
+                                steady_state
 use msgwam_rays_mod,      only: t_ray
 
 implicit none
@@ -73,7 +74,7 @@ subroutine init_ray_state(rays, ghosts, last_meta)
     fname = "INPUT/rays-" // trim(pe_str) // ".dat"
     inquire(file=trim(fname), exist=from_restart)
 
-    if (.not. from_restart) then
+    if (steady_state .or. (.not. from_restart)) then
         rays(:, :, :)%meta = -1
         ghosts(:, :, :) = -1
         last_meta(:, :) = 1
@@ -137,6 +138,10 @@ subroutine save_ray_state(rays, ghosts, last_meta)
     character(len=32) :: fname, pe_str
 
     ! --------------------------------------------------------------------------
+
+    if (steady_state) then
+        return
+    end if
 
     write(pe_str, "(I2.2)") mpp_pe()
     fname = "RESTART/rays-" // trim(pe_str) // ".dat"

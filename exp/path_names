@@ -91,6 +91,7 @@ atmos_param/msgwam/msgwam-rays.f90
 atmos_param/msgwam/msgwam-rk4.f90
 atmos_param/msgwam/msgwam-sinks.f90
 atmos_param/msgwam/msgwam-source.f90
+atmos_param/msgwam/msgwam-steady.f90
 atmos_param/msgwam/msgwam-utils.f90
 atmos_param/cloud_generator/null/cloud_generator.f90
 atmos_param/cloud_rad/cloud_rad.f90

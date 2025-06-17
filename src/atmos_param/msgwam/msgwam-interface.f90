@@ -13,7 +13,7 @@ use fms_mod,              only: CLOCK_ROUTINE, fms_init, mpp_clock_begin, &
 use time_manager_mod,     only: time_manager_init, time_type
 
 use msgwam_constants_mod, only: i_max, init_msgwam_constants, j_max, n_max, &
-                                n_source, q_max
+                                n_source, q_max, steady_state
 use msgwam_debug_mod,     only: check_rays, track_ray
 use msgwam_io_mod,        only: init_nc_output, init_ray_state, &
                                 save_ray_state, send_nc_output
@@ -24,6 +24,7 @@ use msgwam_RK4_mod,       only: take_RK4_step
 use msgwam_sinks_mod,     only: apply_breaking, apply_dissipation, &
                                 check_boundaries
 use msgwam_source_mod,    only: check_source, init_source
+use msgwam_steady_mod,    only: get_steady_fluxes
 
 implicit none
 private
@@ -165,37 +166,47 @@ subroutine msgwam_calc(i_start, j_start, lat, &
         z_centers, z_faces, u_bar, v_bar, rho, N2, G2)
 
     call mpp_clock_end(clocks(1))
-    call track_ray(rays, 2)
-    call mpp_clock_begin(clocks(2))
 
-    call take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt_rays, rays)
+    if (steady_state) then
 
-    call mpp_clock_end(clocks(2))
-    call track_ray(rays, 3)
-    call mpp_clock_begin(clocks(3))
+        call get_steady_fluxes(z_centers, z_faces, u_bar, v_bar, rho, N2, &
+            G2, dt, rays, ghosts, last_meta, flux_x, flux_y)
 
-    call apply_dissipation(z_centers, z_faces, rho, dt_rays, rays)
-    call apply_breaking(z_faces, rho, rays)
-    call check_boundaries(dt, z_centers, rays)
+    else
 
-    call mpp_clock_end(clocks(3))
-    call track_ray(rays, 4)
-    call mpp_clock_begin(clocks(4))
+        call track_ray(rays, 2)
+        call mpp_clock_begin(clocks(2))
 
-    call check_source(z_centers, u_bar, v_bar, N2, G2, dt_rays, &
-        rays, ghosts, last_meta)
+        call take_RK4_step(z_centers, u_bar, v_bar, N2, G2, dt_rays, rays)
 
-    call mpp_clock_end(clocks(4))
-    call track_ray(rays, 5)
-    call mpp_clock_begin(clocks(5))
+        call mpp_clock_end(clocks(2))
+        call track_ray(rays, 3)
+        call mpp_clock_begin(clocks(3))
 
-    call project_fluxes(z_centers, rays, flux_x, flux_y)
+        call apply_dissipation(z_centers, z_faces, rho, dt_rays, rays)
+        call apply_breaking(z_faces, rho, rays)
+        call check_boundaries(dt, z_centers, rays)
+
+        call mpp_clock_end(clocks(3))
+        call track_ray(rays, 4)
+        call mpp_clock_begin(clocks(4))
+
+        call check_source(z_centers, u_bar, v_bar, N2, G2, dt_rays, &
+            rays, ghosts, last_meta)
+
+        call mpp_clock_end(clocks(4))
+        call track_ray(rays, 5)
+        call mpp_clock_begin(clocks(5))
+
+        call project_fluxes(z_centers, rays, flux_x, flux_y)
+        call track_ray(rays, 6)
+        call check_rays(rays)
+
+        call mpp_clock_end(clocks(5))
+
+    end if
+
     call get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
-
-    call mpp_clock_end(clocks(5))
-    call track_ray(rays, 6)
-    call check_rays(rays)
-
     call send_nc_output(i_start, j_start, Time, flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine msgwam_calc

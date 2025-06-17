@@ -232,7 +232,7 @@ def _get_zero_crossings(u: np.ndarray, days: np.ndarray) -> np.ndarray:
 
     u_hat = np.fft.rfft(u)
     freqs = np.fft.rfftfreq(len(u), days[1] - days[0])
-    u_hat[freqs > 1 / 60] = 0
+    u_hat[freqs > 1 / 120] = 0
     u = np.fft.irfft(u_hat)
 
     return days[:-1][(u[:-1] > 0) & (u[1:] < 0)]

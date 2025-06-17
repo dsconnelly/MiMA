@@ -6,7 +6,8 @@ module msgwam_debug_mod
 
 use fms_mod,              only: error_mesg, FATAL, mpp_pe
 
-use msgwam_constants_mod, only: debug_mode, i_max, j_max, n_max, track
+use msgwam_constants_mod, only: debug_mode, i_max, j_max, n_max, steady_state, &
+                                track
 use msgwam_rays_mod,      only: t_ray
 
 implicit none
@@ -31,6 +32,10 @@ subroutine check_rays(rays)
     ! --------------------------------------------------------------------------
 
     if (debug_mode /= 1) return
+
+    if (steady_state) then
+        call error_mesg("msgwam", "cannot debug in steady state", FATAL)
+    end if
 
     do j = 1, j_max
         do i = 1, i_max
@@ -69,6 +74,10 @@ subroutine track_ray(rays, loc)
     ! --------------------------------------------------------------------------
 
     if (debug_mode /= 2) return
+
+    if (steady_state) then
+        call error_mesg("msgwam", "cannot debug in steady state", FATAL)
+    end if
     
     pe = track(1)
     n = track(2)
