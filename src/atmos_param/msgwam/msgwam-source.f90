@@ -282,7 +282,7 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
     ! --------------------------------------------------------------------------
     logical :: cleared
     integer :: dir, i, j, n, q_hi, q_lo, q_mid, s
-    real :: a, b, cg, cp, den, flux, G2_source, k, l, m, mag_cp_hat, &
+    real :: a, b, cg, den, flux, G2_source, k, l, m, mag_cp, mag_cp_hat, &
             mag_wvn_hor, omega_hat, N2_source, prob, r, r_lo, r_hi, scale_x, &
             scale_y, u, v
 
@@ -332,13 +332,13 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
                         end if
                     end if
 
-                    cp = cp_source(n)
+                    mag_cp_hat = cp_source(n)
                     u = u_bar(q_source, i, j)
                     v = v_bar(q_source, i, j)
-                    mag_cp_hat = cp - COS_PHI(dir) * u - SIN_PHI(dir) * v
+                    mag_cp = mag_cp_hat + COS_PHI(dir) * u + SIN_PHI(dir) * v
 
                     if (is_extrinsic(j)) then
-                        flux = exp(-0.5 * ((cp / cp_width(j)) ** 2))
+                        flux = exp(-0.5 * ((mag_cp / cp_width(j)) ** 2))
                     else
                         flux = exp(-0.5 * ((mag_cp_hat / cp_width(j)) ** 2))
                     end if
