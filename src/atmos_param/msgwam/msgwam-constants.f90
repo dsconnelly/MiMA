@@ -23,6 +23,7 @@ logical :: break_waves        = .true.
 real    :: cp_max             = 50.
 real    :: cp_width_ex        = 35.
 real    :: cp_width_tr        = 35.
+real    :: dr_ghost           = 1000.
 real    :: dr_max             = 10000.
 real    :: dr_min             = 50.
 real    :: dr_source          = 1000.
@@ -34,21 +35,21 @@ real    :: mu                 = 1.e-3
 integer :: n_max              = 2500
 integer :: n_source           = 48
 integer :: n_sponge           = 3
+real    :: r_source           = 10000.
 real    :: source_dlat        = 5.
-real    :: source_pressure    = 300.e2
 logical :: steady_state       = .false.
 real    :: T_hat_source       = 10. * 3600
 logical :: use_shapiro_filter = .true.
 
 ! These namelist parameters are for debugging only.
-integer               :: debug_mode = 0
+integer               :: debug_mode       = 0
 logical               :: print_prune_diag = .false.
-integer, dimension(5) :: track      = (/ 0, 1, 1, 1, 1/)
+integer, dimension(5) :: track            = (/ 0, 1, 1, 1, 1/)
 
 namelist / msgwam_nml / &
     boundary_flux_ex, boundary_flux_tr, break_waves, cp_max, cp_width_ex, &
-    cp_width_tr, dr_max, dr_min, dr_source, epsilon, lat_tropics, max_age, &
-    min_flux, mu, n_max, n_source, n_sponge, source_dlat, source_pressure, &
+    cp_width_tr, dr_ghost, dr_max, dr_min, dr_source, epsilon, lat_tropics, &
+    max_age, min_flux, mu, n_max, n_source, n_sponge, r_source, source_dlat, &
     steady_state, T_hat_source, use_shapiro_filter, debug_mode, &
     print_prune_diag, track
 

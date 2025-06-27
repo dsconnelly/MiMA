@@ -5,10 +5,10 @@ module msgwam_steady_mod
 ! ==============================================================================
 
 use msgwam_constants_mod, only: f2, i_max, j_max, n_max, n_source, n_sponge, &
-                                q_max, use_shapiro_filter
+                                q_max, r_source, use_shapiro_filter
 use msgwam_rays_mod,      only: get_cg_r, get_m, t_ray
-use msgwam_source_mod,    only: q_source, update_launches
-use msgwam_utils_mod,     only: get_interp_coeffs, shapiro_filter
+use msgwam_source_mod,    only: update_launches
+use msgwam_utils_mod,     only: get_interp_coeffs, locate, shapiro_filter
 
 implicit none
 private
@@ -36,7 +36,7 @@ subroutine get_steady_fluxes(z_centers, z_faces, u_c, v_c, rho_c, N2_c, G2, &
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, j, n, q
+    integer :: i, j, n, q, q_source
     real :: action, aflux, dec_x, dec_y, f_abs, m, omega, omega_hat, &
         omega_hat_sq, threshold, wvn_hor_sq
 
@@ -63,6 +63,8 @@ subroutine get_steady_fluxes(z_centers, z_faces, u_c, v_c, rho_c, N2_c, G2, &
                u_c(:, i, j), v_c(:, i, j), rho_c(:, i, j), N2_c(:, i, j), &
                u_f, v_f, rho_f, N2_f &
             )
+
+            q_source = locate(z_centers(1:q_max, i, j), r_source, 30)
 
             do n = 1, n_source
             associate(ray => launches(n, i, j))

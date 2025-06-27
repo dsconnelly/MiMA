@@ -204,7 +204,7 @@ pure subroutine check_boundaries(z_centers, rays)
 
             do n = 1, n_max
                 associate (ray => rays(n, i, j))
-                    if ((ray%meta == -1) .or. ray%is_ghost) then
+                    if ((ray%meta == -1) .or. (ray%ghost_id /= -1)) then
                         cycle
                     end if
 

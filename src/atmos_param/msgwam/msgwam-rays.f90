@@ -13,8 +13,7 @@ public delete_ray, get_cg_r, get_dm, get_m, &
 
 type :: t_ray
     real :: r_hi, r_lo, k, l, m, dm, dens, cg_r, omega_hat, G2
-    integer :: age, meta, q_hi, q_lo, q_mid
-    logical :: is_ghost
+    integer :: age, meta, q_hi, q_lo, q_mid, ghost_id
 end type t_ray
 
 contains
@@ -44,7 +43,7 @@ pure subroutine delete_ray(ray)
 
     ray%age = 0
     ray%meta = -1
-    ray%is_ghost = .false.
+    ray%ghost_id = -1
 
     ray%q_lo = 0
     ray%q_mid = 0
