@@ -124,7 +124,7 @@ pure subroutine apply_dissipation(z_centers, z_faces, rho, dt, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i, j, n
-    real :: a, b, damping, nu, r, sponge, wvn_sq, z_sponge, z_zero
+    real :: a, b, damping, nu, r, wvn_sq, z_sponge, z_zero
     real, dimension(q_max - 1) :: dz_inv
 
     ! --------------------------------------------------------------------------
@@ -180,12 +180,11 @@ pure subroutine apply_dissipation(z_centers, z_faces, rho, dt, rays)
 
 end subroutine apply_dissipation
 
-pure subroutine check_boundaries(dt, z_centers, rays)
+pure subroutine check_boundaries(z_centers, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real,                                        intent(in)    :: dt
     real, dimension(0:q_max + 1, i_max, j_max),  intent(in)    :: z_centers
     type(t_ray), dimension(n_max, i_max, j_max), intent(inout) :: rays
 

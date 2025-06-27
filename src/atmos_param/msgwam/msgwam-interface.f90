@@ -185,7 +185,7 @@ subroutine msgwam_calc(i_start, j_start, lat, &
 
         call apply_dissipation(z_centers, z_faces, rho, dt_rays, rays)
         call apply_breaking(z_faces, rho, rays)
-        call check_boundaries(dt, z_centers, rays)
+        call check_boundaries(z_centers, rays)
 
         call mpp_clock_end(clocks(3))
         call track_ray(rays, 4)
