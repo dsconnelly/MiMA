@@ -4,10 +4,10 @@ module msgwam_RK4_mod
 ! This module implements the RK4 time stepping scheme for the ray volumes.
 ! ==============================================================================
 
-use msgwam_constants_mod, only: dr_max, dr_min, f2, i_max, j_max, n_max, &
-                                q_max, r_source
+use msgwam_constants_mod, only: dr_max, dr_min, f2, i_max, j_max, n_max, q_max
 use msgwam_mean_mod,      only: update_mean_gradients
 use msgwam_rays_mod,      only: get_cg_r, get_omega_hat_sq, t_ray
+use msgwam_source_mod,    only: r_source
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
 implicit none
@@ -96,7 +96,7 @@ pure subroutine take_RK4_step(z_centers, u_bar, v_bar, N2_all, G2_all, dt, rays)
                         call get_cg_r(ray%m, wvn_hor_sq, m2, N2, f2(j), G2, &
                             ignore, cg_lo)
 
-                        if (r < r_source) then
+                        if (r < r_source(j)) then
                             cg_mid = 0.5 * (cg_lo + cg_hi)
                             incs(stage)%r_lo = dt * cg_mid
                             incs(stage)%r_hi = dt * cg_mid

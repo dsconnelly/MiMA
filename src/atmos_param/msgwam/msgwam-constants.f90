@@ -35,7 +35,8 @@ real    :: mu                 = 1.e-3
 integer :: n_max              = 2500
 integer :: n_source           = 48
 integer :: n_sponge           = 3
-real    :: r_source           = 10000.
+real    :: r_source_ex        = 10000.
+real    :: r_source_tr        = 10000.
 real    :: source_dlat        = 5.
 logical :: steady_state       = .false.
 real    :: T_hat_source       = 10. * 3600
@@ -49,9 +50,9 @@ integer, dimension(5) :: track            = (/ 0, 1, 1, 1, 1/)
 namelist / msgwam_nml / &
     boundary_flux_ex, boundary_flux_tr, break_waves, cp_max, cp_width_ex, &
     cp_width_tr, dr_ghost, dr_max, dr_min, dr_source, epsilon, lat_tropics, &
-    max_age, min_flux, mu, n_max, n_source, n_sponge, r_source, source_dlat, &
-    steady_state, T_hat_source, use_shapiro_filter, debug_mode, &
-    print_prune_diag, track
+    max_age, min_flux, mu, n_max, n_source, n_sponge, r_source_ex, &
+    r_source_tr, source_dlat, steady_state, T_hat_source, use_shapiro_filter, &
+    debug_mode, print_prune_diag, track
 
 private :: msgwam_nml
 

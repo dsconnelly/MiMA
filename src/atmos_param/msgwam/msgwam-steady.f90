@@ -5,9 +5,9 @@ module msgwam_steady_mod
 ! ==============================================================================
 
 use msgwam_constants_mod, only: f2, i_max, j_max, n_max, n_source, n_sponge, &
-                                q_max, r_source, use_shapiro_filter
+                                q_max, use_shapiro_filter
 use msgwam_rays_mod,      only: get_cg_r, get_m, t_ray
-use msgwam_source_mod,    only: update_launches
+use msgwam_source_mod,    only: r_source, update_launches
 use msgwam_utils_mod,     only: get_interp_coeffs, locate, shapiro_filter
 
 implicit none
@@ -64,7 +64,7 @@ subroutine get_steady_fluxes(z_centers, z_faces, u_c, v_c, rho_c, N2_c, G2, &
                u_f, v_f, rho_f, N2_f &
             )
 
-            q_source = locate(z_centers(1:q_max, i, j), r_source, 30)
+            q_source = locate(z_centers(1:q_max, i, j), r_source(j), 30)
 
             do n = 1, n_source
             associate(ray => launches(n, i, j))

@@ -11,21 +11,22 @@ use fms_mod,              only: error_mesg, FATAL, mpp_pe
 use msgwam_constants_mod, only: boundary_flux_ex, boundary_flux_tr, cp_max, &
                                 cp_width_ex, cp_width_tr, dr_ghost, dr_source, &
                                 epsilon, f2, i_max, j_max, lat_tropics, n_max, &
-                                n_source, print_prune_diag, q_max, r_source, &
-                                source_dlat, steady_state, T_hat_source
+                                n_source, print_prune_diag, q_max, &
+                                r_source_ex, r_source_tr, source_dlat, &
+                                steady_state, T_hat_source
 use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
 implicit none
 private
 
-public check_source, init_source, update_launches
+public check_source, init_source, r_source, update_launches
 
 logical :: is_stochastic
 integer :: n_launches, n_per_dir
 real :: dc_source, omega_hat_source
 logical, dimension(:), allocatable :: is_extrinsic
-real, dimension(:), allocatable :: boundary_flux, cp_width, mag_cp_hat
+real, dimension(:), allocatable :: boundary_flux, cp_width, mag_cp_hat, r_source
 type(t_ray), dimension(:, :, :), allocatable :: launches
 
 real, dimension(4) :: COS_PHI = (/ 1., 0., -1., 0. /)
@@ -186,6 +187,7 @@ subroutine init_source(lat_bounds)
     allocate(is_extrinsic(j_max))
     allocate(boundary_flux(j_max))
     allocate(cp_width(j_max))
+    allocate(r_source(j_max))
 
     n_launches = n_source * max(1, int(dr_ghost / dr_source) + 1)
     allocate(launches(n_launches, i_max, j_max))
@@ -202,6 +204,7 @@ subroutine init_source(lat_bounds)
         is_extrinsic(j) = lat > lat_tropics
         boundary_flux(j) = boundary_flux_tr * (1 - arg) + boundary_flux_ex * arg
         cp_width(j) = cp_width_tr * (1 - arg) + cp_width_ex * arg
+        r_source(j) = r_source_tr * (1 - arg) + r_source_ex * arg
     end do
 
 end subroutine init_source
@@ -296,7 +299,6 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
 
     launches(:, :, :)%meta = -1
     launches(:, :, :)%ghost_id = -1
-    r_ghost = r_source - dr_ghost
 
     do j = 1, j_max
         do i = 1, i_max
@@ -309,9 +311,11 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
                 G2_col => G2(:, i, j) &
             )
 
-            q_mid = locate(z, r_source, 30)
+            q_mid = locate(z, r_source(j), 30)
+            r_ghost = r_source(j) - dr_ghost
+
             dz_inv = 1. / (z(:q_max - 1) - z(2:))
-            call get_interp_coeffs(z, dz_inv, r_source, q_mid, a, b)
+            call get_interp_coeffs(z, dz_inv, r_source(j), q_mid, a, b)
 
             u = a * u_col(q_mid) + b * u_col(q_mid + 1)
             v = a * v_col(q_mid) + b * v_col(q_mid + 1)
@@ -359,10 +363,10 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
                     l = mag_wvn_hor * SIN_PHI(dir)
 
                     if (is_stochastic .or. steady_state) then
-                        r_hi = r_source
+                        r_hi = r_source(j)
                     else if (ghosts(s, i, j) > 0) then
                         r_hi = rays(ghosts(s, i, j), i, j)%r_lo
-                        r_hi = min(r_hi, r_source)
+                        r_hi = min(r_hi, r_source(j))
                     else
                         r_hi = r_ghost
                     end if
