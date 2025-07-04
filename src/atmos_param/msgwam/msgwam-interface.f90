@@ -207,8 +207,8 @@ subroutine msgwam_calc(i_start, j_start, lat, &
     end if
 
     call get_accelerations(z_faces, rho, flux_x, flux_y, du_dt, dv_dt)
-    call send_nc_output(i_start, j_start, Time, rho, N2, G2, flux_x, flux_y, &
-        du_dt, dv_dt)
+    call send_nc_output(i_start, j_start, Time, u_bar, v_bar, rho, N2, G2, &
+        flux_x, flux_y, du_dt, dv_dt)
 
 end subroutine msgwam_calc
 

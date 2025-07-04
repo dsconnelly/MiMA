@@ -77,7 +77,7 @@ subroutine init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: i_err, io, j, log_unit, nml_unit
-    real :: lat
+    real :: ROT_EARTH, lat
 
     ! --------------------------------------------------------------------------
 
@@ -103,10 +103,11 @@ subroutine init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
     q_max = size(p_ref) - 1
 
     allocate(f2(j_max))
+    ROT_EARTH = 2 * PI / 86400.
 
     do j = 1, j_max
         lat = 0.5 * (lat_bounds(j) + lat_bounds(j + 1))
-        f2(j) = (2 * PI * sin(lat) / 86400.) ** 2
+        f2(j) = (2 * ROT_EARTH * sin(lat)) ** 2
     end do
 
     min_N2 = (2 * PI / (2 * 3600)) ** 2

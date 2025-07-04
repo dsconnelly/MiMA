@@ -23,8 +23,9 @@ public init_nc_output, init_ray_state, save_ray_state, send_nc_output
 ! ==============================================================================
 
 character(len=7) :: mod_name = "msgwam"
-integer :: id_rho, id_N2, id_G2, id_flux_x, id_flux_y, id_accel_x, id_accel_y
 real, parameter :: missing_value = -999.
+integer :: id_u, id_v, id_rho, id_N2, id_G2, id_flux_x, id_flux_y, &
+    id_accel_x, id_accel_y
 
 ! ==============================================================================
 
@@ -39,6 +40,11 @@ subroutine init_nc_output(axes, Time)
     type(time_type),       intent(in) :: Time
 
     ! --------------------------------------------------------------------------
+
+    id_u = register_diag_field(mod_name, "gw_u", axes(1:3), Time, &
+        "MS-GWaM zonal wind", "m / s", missing_value=missing_value)
+    id_v = register_diag_field(mod_name, "gw_v", axes(1:3), Time, &
+        "MS-GWaM meridional wind", "m / s", missing_value=missing_value)
 
     id_rho = register_diag_field(mod_name, "gw_rho", axes(1:3), Time, &
         "MS-GWaM density", "kg/m^3", missing_value=missing_value)
@@ -168,15 +174,16 @@ subroutine save_ray_state(rays, ghosts, last_meta)
 
 end subroutine save_ray_state
 
-subroutine send_nc_output(i_start, j_start, Time, rho, N2, G2, flux_x, flux_y, &
-    du_dt, dv_dt)
+subroutine send_nc_output(i_start, j_start, Time, u_bar, v_bar, rho, N2, G2, &
+    flux_x, flux_y, du_dt, dv_dt)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     integer,                                  intent(in) :: i_start, j_start
     type(time_type),                          intent(in) :: Time
-    real, dimension(q_max, i_max, j_max),     intent(in) :: N2, G2, rho
+    real, dimension(q_max, i_max, j_max),     intent(in) :: u_bar, v_bar, N2, &
+                                                            G2, rho
     real, dimension(q_max + 1, i_max, j_max), intent(in) :: flux_x, flux_y
     real, dimension(i_max, j_max, q_max),     intent(in) :: du_dt, dv_dt
 
@@ -187,6 +194,16 @@ subroutine send_nc_output(i_start, j_start, Time, rho, N2, G2, flux_x, flux_y, &
     real, dimension(i_max, j_max, q_max) :: temp
 
     ! --------------------------------------------------------------------------
+
+    if (id_u > 0) then
+        call reorder_axes(u_bar, temp)
+        i_err = send_data(id_u, temp, Time, i_start, j_start)
+    end if
+
+    if (id_v > 0) then
+        call reorder_axes(v_bar, temp)
+        i_err = send_data(id_v, temp, Time, i_start, j_start)
+    end if
 
     if (id_rho > 0) then
         call reorder_axes(rho, temp)

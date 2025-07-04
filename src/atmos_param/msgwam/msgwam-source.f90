@@ -26,7 +26,8 @@ logical :: is_stochastic
 integer :: n_launches, n_per_dir
 real :: dc_source, omega_hat_source
 logical, dimension(:), allocatable :: is_extrinsic
-real, dimension(:), allocatable :: boundary_flux, cp_width, mag_cp_hat, r_source
+real, dimension(:), allocatable :: cp_arg, cp_width, r_source
+real, dimension(:, :), allocatable :: flux
 type(t_ray), dimension(:, :, :), allocatable :: launches
 
 real, dimension(4) :: COS_PHI = (/ 1., 0., -1., 0. /)
@@ -174,7 +175,7 @@ subroutine init_source(lat_bounds)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: j, n
-    real :: arg, lat
+    real :: arg, lat, total
 
     ! --------------------------------------------------------------------------
 
@@ -183,9 +184,9 @@ subroutine init_source(lat_bounds)
     omega_hat_source = 2 * PI / T_hat_source
     is_stochastic = epsilon > 0.
 
-    allocate(mag_cp_hat(n_per_dir))
+    allocate(cp_arg(n_per_dir))
     allocate(is_extrinsic(j_max))
-    allocate(boundary_flux(j_max))
+    allocate(flux(n_per_dir, j_max))
     allocate(cp_width(j_max))
     allocate(r_source(j_max))
 
@@ -193,7 +194,7 @@ subroutine init_source(lat_bounds)
     allocate(launches(n_launches, i_max, j_max))
 
     do n = 1, n_per_dir
-        mag_cp_hat(n) = (n - 0.5) * dc_source
+        cp_arg(n) = (n - 0.5) * dc_source
     end do
 
     do j = 1, j_max
@@ -202,9 +203,15 @@ subroutine init_source(lat_bounds)
         arg = min(max(arg, 0.), 1.) 
 
         is_extrinsic(j) = lat > lat_tropics
-        boundary_flux(j) = boundary_flux_tr * (1 - arg) + boundary_flux_ex * arg
         cp_width(j) = cp_width_tr * (1 - arg) + cp_width_ex * arg
         r_source(j) = r_source_tr * (1 - arg) + r_source_ex * arg
+
+        do n = 1, n_per_dir
+            flux(n, j) = exp(-0.5 * ((cp_arg(n) / cp_width(j)) ** 2))
+        end do
+
+        total = boundary_flux_tr * (1 - arg) + boundary_flux_ex * arg
+        flux(:, j) = 0.5 * flux(:, j) * total / sum(flux(:, j))
     end do
 
 end subroutine init_source
@@ -226,26 +233,30 @@ subroutine prune(n_excess, rays)
 
     ! --------------------------------------------------------------------------
 
-    allocate(idx(maxval(n_excess), i_max, j_max))
-    call find_lowest_energies(n_excess, rays, idx)
-
     if (print_prune_diag) then
         n_deleted = 0.
         avg_age = 0.
     end if
 
-    do j = 1, j_max
-        do i = 1, i_max
-            do n = 1, n_excess(i, j)
-                if (print_prune_diag) then
-                    n_deleted = n_deleted + 1.
-                    avg_age = avg_age + rays(idx(n, i, j), i, j)%age
-                end if
+    if (maxval(n_excess) > 0) then
 
-                call delete_ray(rays(idx(n, i, j), i, j))
+        allocate(idx(maxval(n_excess), i_max, j_max))
+        call find_lowest_energies(n_excess, rays, idx)
+
+        do j = 1, j_max
+            do i = 1, i_max
+                do n = 1, n_excess(i, j)
+                    if (print_prune_diag) then
+                        n_deleted = n_deleted + 1.
+                        avg_age = avg_age + rays(idx(n, i, j), i, j)%age
+                    end if
+
+                    call delete_ray(rays(idx(n, i, j), i, j))
+                end do
             end do
         end do
-    end do
+
+    end if
 
     if (print_prune_diag) then
         if (n_deleted > 0) then
@@ -282,12 +293,9 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: add_at, dir, i, j, n, q_hi, q_lo, q_mid, s
-    real :: a, b, cg, G2_source, k, l, m, mag_cp, mag_wvn_hor, omega_hat, &
-        N2_source, prob, r, r_lo, r_hi, scale_x, scale_y, u, v
+    real :: a, b, cg, cp_hat, G2_source, k, l, m, mag_cp, mag_wvn_hor, &
+        omega_hat, N2_source, prob, r, r_ghost, r_lo, r_hi, u, v
 
-    real :: r_ghost
-
-    real, dimension(n_source) :: flux
     real, dimension(q_max - 1) :: dz_inv
     real, dimension(n_source, i_max, j_max) :: rand
 
@@ -320,32 +328,10 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
             u = a * u_col(q_mid) + b * u_col(q_mid + 1)
             v = a * v_col(q_mid) + b * v_col(q_mid + 1)
 
-            scale_x = 0.
-            scale_y = 0.
+            N2_source = a * N2_col(q_mid) + b * N2_col(q_mid + 1)
+            G2_source = a * G2_col(q_mid) + b * G2_col(q_mid + 1)
 
-            do dir = 1, 4
-                do n = 1, n_per_dir
-                    s = (dir - 1) * n_per_dir + n
-
-                    if (is_extrinsic(j)) then
-                        mag_cp = mag_cp_hat(n) &
-                            + COS_PHI(dir) * u &
-                            + SIN_PHI(dir) * v
-
-                        flux(s) = exp(-0.5 * ((mag_cp / cp_width(j)) ** 2))
-                    else
-                        flux(s) = exp(-0.5 * ((mag_cp_hat(n) / cp_width(j)) ** 2))
-                    end if
-
-                    scale_x = scale_x + abs(COS_PHI(dir)) * flux(s)
-                    scale_y = scale_y + abs(SIN_PHI(dir)) * flux(s)
-                end do
-            end do
-
-            scale_x = boundary_flux(j) / scale_x
-            scale_y = boundary_flux(j) / scale_y
             add_at = 1
-
             do dir = 1, 4
                 do n = 1, n_per_dir
                     s = (dir - 1) * n_per_dir + n
@@ -358,9 +344,16 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
                         end if
                     end if
 
-                    mag_wvn_hor = omega_hat_source / mag_cp_hat(n)
-                    k = mag_wvn_hor * COS_PHI(dir)
-                    l = mag_wvn_hor * SIN_PHI(dir)
+                    cp_hat = cp_arg(n) * (COS_PHI(dir) + SIN_PHI(dir))
+                    if (is_extrinsic(j)) then
+                        cp_hat = cp_hat &
+                            - u * abs(COS_PHI(dir)) &
+                            - v * abs(SIN_PHI(dir))
+                    end if
+
+                    mag_wvn_hor = omega_hat_source / cp_hat
+                    k = mag_wvn_hor * abs(COS_PHI(dir))
+                    l = mag_wvn_hor * abs(SIN_PHI(dir))
 
                     if (is_stochastic .or. steady_state) then
                         r_hi = r_source(j)
@@ -380,10 +373,6 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
                         q_lo = locate(z, r_lo, 30)
                         q_mid = locate(z, r, 30)
                     
-                        call get_interp_coeffs(z, dz_inv, r, q_mid, a, b)
-                        N2_source = a * N2_col(q_mid) + b * N2_col(q_mid + 1)
-                        G2_source = a * G2_col(q_mid) + b * G2_col(q_mid + 1)
-
                         m = get_m(k, l, omega_hat_source ** 2, N2_source, f2(j))
                         call get_cg_r(m, k ** 2 + l ** 2, m ** 2, N2_source, &
                             f2(j), G2_source, omega_hat, cg)
@@ -405,9 +394,7 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
                             ray%m = m
 
                             ray%dm = get_dm(m, dc_source, N2_source)
-                            ray%dens = flux(s) / abs(mag_wvn_hor * ray%dm * cg)
-                            ray%dens = ray%dens * merge(scale_x, scale_y, &
-                                COS_PHI(dir) /= 0)
+                            ray%dens = flux(n, j) / abs(mag_wvn_hor * ray%dm * cg)
 
                             ray%cg_r = cg
                             ray%omega_hat = omega_hat
