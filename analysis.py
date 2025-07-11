@@ -49,7 +49,7 @@ def plot_climatology(ds: xr.Dataset, season: Optional[str]=None) -> None:
     y = np.log10(ds['pfull'].values)
     yticks, ylabels = _get_yticks()
 
-    keep = ds['time.year'] > 1
+    keep = ds['time.year'] > 0
     if season is not None:
         keep = keep & (ds['time.season'] == season)
 
@@ -137,7 +137,7 @@ def plot_pruning(_, fname: str) -> None:
         ax.set_xlabel('integration day')
 
     axes[0].set_ylim(0, 200)
-    axes[1].set_ylim(0, 3)
+    axes[1].set_ylim(0, 5)
 
     axes[0].set_ylabel(f'prunes per {dt_resample // 3600} hours')
     axes[1].set_ylabel('age of pruned rays (days)')
@@ -233,8 +233,8 @@ def _get_zero_crossings(u: np.ndarray, days: np.ndarray) -> np.ndarray:
     u_hat = np.fft.rfft(u)
     freqs = np.fft.rfftfreq(len(u), days[1] - days[0])
     u_hat[freqs > 1 / 120] = 0
-    u = np.fft.irfft(u_hat)
-
+    
+    u = np.fft.irfft(u_hat, n=len(u))
     return days[:-1][(u[:-1] > 0) & (u[1:] < 0)]
 
 def _open_dataset(fname: str) -> xr.Dataset:

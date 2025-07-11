@@ -89,6 +89,7 @@ subroutine init_ray_state(rays, ghosts, last_meta)
 
     if (steady_state .or. (.not. from_restart)) then
         rays(:, :, :)%meta = -1
+        rays(:, :, :)%ghost_id = -1
         ghosts(:, :, :) = -1
         last_meta(:, :) = 1
 
@@ -174,7 +175,7 @@ subroutine save_ray_state(rays, ghosts, last_meta)
 
 end subroutine save_ray_state
 
-subroutine send_nc_output(i_start, j_start, Time, u_bar, v_bar, rho, N2, G2, &
+subroutine send_nc_output(i_start, j_start, Time, u, v, rho, N2, G2, &
     flux_x, flux_y, du_dt, dv_dt)
 
     ! --------------------------------------------------------------------------
@@ -182,8 +183,7 @@ subroutine send_nc_output(i_start, j_start, Time, u_bar, v_bar, rho, N2, G2, &
     ! --------------------------------------------------------------------------
     integer,                                  intent(in) :: i_start, j_start
     type(time_type),                          intent(in) :: Time
-    real, dimension(q_max, i_max, j_max),     intent(in) :: u_bar, v_bar, N2, &
-                                                            G2, rho
+    real, dimension(q_max, i_max, j_max),     intent(in) :: u, v, N2, G2, rho
     real, dimension(q_max + 1, i_max, j_max), intent(in) :: flux_x, flux_y
     real, dimension(i_max, j_max, q_max),     intent(in) :: du_dt, dv_dt
 
@@ -196,12 +196,12 @@ subroutine send_nc_output(i_start, j_start, Time, u_bar, v_bar, rho, N2, G2, &
     ! --------------------------------------------------------------------------
 
     if (id_u > 0) then
-        call reorder_axes(u_bar, temp)
+        call reorder_axes(u, temp)
         i_err = send_data(id_u, temp, Time, i_start, j_start)
     end if
 
     if (id_v > 0) then
-        call reorder_axes(v_bar, temp)
+        call reorder_axes(v, temp)
         i_err = send_data(id_v, temp, Time, i_start, j_start)
     end if
 
@@ -221,12 +221,12 @@ subroutine send_nc_output(i_start, j_start, Time, u_bar, v_bar, rho, N2, G2, &
     end if
 
     if (id_flux_x > 0) then
-        call reorder_axes(flux_x(:q_max, :, :), temp)
+        call reorder_axes(0.5 * (flux_x(:q_max, :, :) + flux_x(2:, :, :)), temp)
         i_err = send_data(id_flux_x, temp, Time, i_start, j_start)
     end if
 
     if (id_flux_y > 0) then
-        call reorder_axes(flux_y(:q_max, :, :), temp)
+        call reorder_axes(0.5 * (flux_y(:q_max, :, :) + flux_y(2:, :, :)), temp)
         i_err = send_data(id_flux_y, temp, Time, i_start, j_start)
     end if
 

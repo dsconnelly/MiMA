@@ -107,27 +107,18 @@
 	water_file = 'INPUT/navy_pctwater.data.nc' /
 
  &msgwam_nml
-    boundary_flux_ex   = 0.005,
-    boundary_flux_tr   = 0.010,
-    break_waves        = .true.,
-    cp_max             = 50.,
-    cp_width_tr        = 35.,
+    boundary_flux_ex   = 0.004,
+    boundary_flux_tr   = 0.004,
+    cp_width_tr        = 20.,
     cp_width_ex        = 20.,
-    dr_min             = 50.,
-    dr_source          = 5000.,
-    epsilon            = 0.,
+    dr_ghost           = 3000.
+    dr_source          = 2000.,
     lat_tropics        = 25.,
-    max_age            = 864000,
-    min_flux           = 1.e-8,
-    mu                 = 1.e-3,
-    n_max              = 250,
-    n_source           = 24,
+    n_max              = 400,
+    n_source           = 16,
     n_sponge           = 2,
     source_dlat        = 5.,
-    source_pressure    = 315.e+2,
-    T_hat_source       = 21600.,
-    use_shapiro_filter = .true.,
-    debug_mode         = 0 /
+    print_prune_diag   = .false. / 
 
  &ad99_nml
      Bt_0  = 0.0043,  

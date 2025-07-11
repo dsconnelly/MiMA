@@ -1,8 +1,9 @@
 #!/bin/bash -e
 
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=16
-#SBATCH --time=15:00:00
+#SBATCH --nodes=8
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=8
+#SBATCH --time=6:00:00
 #SBATCH --mem=64G
 #SBATCH --job-name=RUN_NAME
 #SBATCH --out=RUN_DIR/slurm.out
@@ -10,6 +11,7 @@
 #SBATCH --mail-type=END,FAIL
 
 cd RUN_DIR
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 module purge
 module load netcdf-c/intel/4.7.4
@@ -34,4 +36,5 @@ for yy in {01..05}; do
     
 done
 
-cdo -timselmean,4 -mergetime ??/atmos_4xdaily.nc daily.nc
+cdo -timselmean,28 -mergetime ??/atmos_4xdaily.nc weekly.nc
+srun -n 1 ./analysis.sh weekly.nc plot-climatology:DJF plot-climatology:JJA plot-qbo

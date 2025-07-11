@@ -21,7 +21,7 @@ contains
 pure subroutine delete_ray(ray)
 
     ! --------------------------------------------------------------------------
-    ! arguments and result
+    ! arguments
     ! --------------------------------------------------------------------------
     type(t_ray), intent(inout) :: ray
 
@@ -51,13 +51,13 @@ pure subroutine delete_ray(ray)
 
 end subroutine delete_ray
 
-pure subroutine get_cg_r(m, wvn_hor_sq, m2, N2, f2, G2, &
+pure subroutine get_cg_r(m, wvn_hor_sq, m2pG2, N2, f2, &
     omega_hat, cg_r)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, intent(in)  :: m, wvn_hor_sq, m2, N2, f2, G2
+    real, intent(in)  :: m, wvn_hor_sq, m2pG2, N2, f2
     real, intent(out) :: omega_hat, cg_r
 
     ! --------------------------------------------------------------------------
@@ -67,7 +67,7 @@ pure subroutine get_cg_r(m, wvn_hor_sq, m2, N2, f2, G2, &
 
     ! --------------------------------------------------------------------------
 
-    call get_omega_hat_sq(wvn_hor_sq, m2, N2, f2, G2, K2pG2_inv, omega_hat_sq)
+    call get_omega_hat_sq(wvn_hor_sq, m2pG2, N2, f2, K2pG2_inv, omega_hat_sq)
     
     omega_hat = sqrt(omega_hat_sq)
     cg_r = m * (f2 - omega_hat_sq) * K2pG2_inv / omega_hat
@@ -105,19 +105,19 @@ pure function get_m(k, l, omega_hat_sq, N2, f2) result(m)
 
 end function get_m
 
-pure subroutine get_omega_hat_sq(wvn_hor_sq, m2, N2, f2, G2, &
+pure subroutine get_omega_hat_sq(wvn_hor_sq, m2pG2, N2, f2, &
     K2pG2_inv, omega_hat_sq)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, intent(in)  :: wvn_hor_sq, m2, N2, f2, G2
+    real, intent(in)  :: wvn_hor_sq, m2pG2, N2, f2
     real, intent(out) :: K2pG2_inv, omega_hat_sq
 
     ! --------------------------------------------------------------------------
 
-    K2pG2_inv = 1. / (wvn_hor_sq + m2 + G2)
-    omega_hat_sq = (N2 * wvn_hor_sq + f2 * (m2 + G2)) * K2pG2_inv
+    K2pG2_inv = 1. / (wvn_hor_sq + m2pG2)
+    omega_hat_sq = (N2 * wvn_hor_sq + f2 * m2pG2) * K2pG2_inv
 
 end subroutine get_omega_hat_sq
 

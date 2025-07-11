@@ -27,8 +27,11 @@ pure subroutine get_interp_coeffs(z, dz_inv, r, q, a, b)
     ! --------------------------------------------------------------------------
 
     a = (r - z(q + 1)) * dz_inv(q)
+
     a = merge(0., a, r < z(q_max))
     a = merge(1., a, r > z(1))
+
+    ! a = min(1., max(0., a))
     b = 1. - a
 
 end subroutine get_interp_coeffs
@@ -44,28 +47,15 @@ pure function locate(z, r, q_guess) result(q)
     integer                            :: q
 
     ! --------------------------------------------------------------------------
-    integer :: dir
-
-    ! --------------------------------------------------------------------------
 
     q = q_guess
-    if (z(q) >= r .and. r > z(q + 1)) return
 
-    if (r > z(1)) then
-        q = 1
-        return
-    end if
+    do while (r <= z(q + 1) .and. q < q_max - 1)
+        q = q + 1
+    end do
 
-    if (r < z(q_max)) then
-        q = q_max - 1
-        return
-    end if
-
-    dir = merge(-1, 1, r > z(q))
-
-    do while (.true.)
-        q = q + dir
-        if (z(q) >= r .and. r > z(q + 1)) return
+    do while (r > z(q) .and. q > 1)
+        q = q - 1
     end do
 
 end function locate
@@ -75,29 +65,27 @@ pure subroutine shapiro_filter(profile)
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(:, :, :), intent(inout) :: profile
+    real, dimension(q_max + 1), intent(inout) :: profile
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: q_max
-    real, dimension(4, size(profile, 2), size(profile, 3)) :: temp
+    real :: a, b
 
     ! --------------------------------------------------------------------------
 
-    q_max = size(profile, 1)
-    temp(1:2, :, :) = profile(1:2, :, :)
-    temp(3:4, :, :) = profile((q_max - 1):q_max, :, :)
+    a = (3. * profile(1) + profile(2)) / 4.
+    b = (profile(q_max) + 3. * profile(q_max + 1)) / 4.
 
-    profile(2:(q_max - 1), :, :) = ( &
-        profile(:(q_max - 2), :, :) + &
-        2 * profile(2:(q_max - 1), :, :) + &
-        profile(3:, :, :) &
+    profile(2:q_max) = ( &
+        profile(:(q_max - 1)) + &
+        2. * profile(2:q_max) + &
+        profile(3:(q_max + 1)) &
     ) / 4.
 
-    profile(1, :, :) = (3 * temp(1, :, :) + temp(2, :, :)) / 4.
-    profile(q_max, :, :) = (temp(3, :, :) + 3 * temp(4, :, :)) / 4.
+    profile(1) = a
+    profile(q_max + 1) = b
 
-end subroutine shapiro_filter
+end subroutine
 
 end module msgwam_utils_mod

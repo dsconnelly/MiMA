@@ -28,8 +28,9 @@ real    :: dr_max             = 10000.
 real    :: dr_min             = 50.
 real    :: dr_source          = 1000.
 real    :: epsilon            = 0.
-real    :: lat_tropics        = 15.
+real    :: lat_tropics        = 25.
 integer :: max_age            = 10 * 86400
+real    :: max_bv_period      = 2 * 3600
 real    :: min_flux           = 1.e-8
 real    :: mu                 = 1.e-3
 integer :: n_max              = 2500
@@ -45,16 +46,16 @@ logical :: use_shapiro_filter = .true.
 ! These namelist parameters are for debugging only.
 integer               :: debug_mode       = 0
 logical               :: print_prune_diag = .false.
-integer, dimension(5) :: track            = (/ 0, 1, 1, 1, 1/)
+integer, dimension(5) :: track            = (/ 0, 1, 1, 1, 1 /)
 
 namelist / msgwam_nml / &
     boundary_flux_ex, boundary_flux_tr, break_waves, cp_max, cp_width_ex, &
     cp_width_tr, dr_ghost, dr_max, dr_min, dr_source, epsilon, lat_tropics, &
-    max_age, min_flux, mu, n_max, n_source, n_sponge, r_source_ex, &
-    r_source_tr, source_dlat, steady_state, T_hat_source, use_shapiro_filter, &
-    debug_mode, print_prune_diag, track
+    max_age, max_bv_period, min_flux, mu, n_max, n_source, n_sponge, &
+    r_source_ex, r_source_tr, source_dlat, steady_state, T_hat_source, &
+    use_shapiro_filter, debug_mode, print_prune_diag, track
 
-private :: msgwam_nml
+private :: max_bv_period, msgwam_nml
 
 ! ==============================================================================
 ! other global constants, set at initialization
@@ -62,7 +63,7 @@ private :: msgwam_nml
 
 integer :: i_max, j_max, q_max
 real, dimension(:), allocatable :: f2
-real :: min_N2, one_over_epsilon
+real :: min_N2, stoch_factor
 
 contains
 
@@ -104,18 +105,17 @@ subroutine init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
 
     allocate(f2(j_max))
     ROT_EARTH = 2 * PI / 86400.
+    min_N2 = (2 * PI / max_bv_period) ** 2
 
     do j = 1, j_max
         lat = 0.5 * (lat_bounds(j) + lat_bounds(j + 1))
         f2(j) = (2 * ROT_EARTH * sin(lat)) ** 2
     end do
 
-    min_N2 = (2 * PI / (2 * 3600)) ** 2
-
     if (epsilon > 0) then
-        one_over_epsilon = 1. / epsilon
+        stoch_factor = 1. / epsilon
     else
-        one_over_epsilon = 1.
+        stoch_factor = 1.
     end if
 
 end subroutine init_msgwam_constants

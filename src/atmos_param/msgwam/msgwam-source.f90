@@ -10,7 +10,7 @@ use fms_mod,              only: error_mesg, FATAL, mpp_pe
 
 use msgwam_constants_mod, only: boundary_flux_ex, boundary_flux_tr, cp_max, &
                                 cp_width_ex, cp_width_tr, dr_ghost, dr_source, &
-                                epsilon, f2, i_max, j_max, lat_tropics, n_max, &
+                                epsilon, f2, j_max, lat_tropics, n_max, &
                                 n_source, print_prune_diag, q_max, &
                                 r_source_ex, r_source_tr, source_dlat, &
                                 steady_state, T_hat_source
@@ -20,149 +20,80 @@ use msgwam_utils_mod,     only: get_interp_coeffs, locate
 implicit none
 private
 
-public check_source, init_source, r_source, update_launches
+public check_source, init_source, r_source
 
 logical :: is_stochastic
 integer :: n_launches, n_per_dir
 real :: dc_source, omega_hat_source
+
 logical, dimension(:), allocatable :: is_extrinsic
 real, dimension(:), allocatable :: cp_arg, cp_width, r_source
 real, dimension(:, :), allocatable :: flux
-type(t_ray), dimension(:, :, :), allocatable :: launches
 
 real, dimension(4) :: COS_PHI = (/ 1., 0., -1., 0. /)
 real, dimension(4) :: SIN_PHI = (/ 0., 1., 0., -1. /)
 
 contains
 
-subroutine check_source(z_centers, u_bar, v_bar, N2, G2, dt, &
-    rays, ghosts, last_meta)
+subroutine check_source(j, z, u, v, N2, G2, dt, rays, ghosts, last_meta)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(0:q_max + 1, i_max, j_max),  intent(in)    :: z_centers
-    real, dimension(q_max, i_max, j_max),        intent(in)    :: u_bar, &
-                                                                  v_bar, N2, G2
-    real,                                        intent(in)    :: dt
-    type(t_ray), dimension(n_max, i_max, j_max), intent(inout) :: rays
-    integer, dimension(n_source, i_max, j_max),  intent(inout) :: ghosts
-    integer, dimension(i_max, j_max),            intent(inout) :: last_meta
+    integer,                       intent(in)    :: j
+    real, dimension(q_max),        intent(in)    :: z, u, v, N2, G2
+    real,                          intent(in)    :: dt
+    type(t_ray), dimension(n_max), intent(inout) :: rays
+    integer, dimension(n_source),  intent(inout) :: ghosts
+    integer,                       intent(inout) :: last_meta
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: add_at, g, i, j, n, s
-    integer, dimension(i_max, j_max) :: n_excess
+    integer :: add_at, gid, n, n_excess, s
+    type(t_ray), dimension(n_launches) :: launches
 
     ! --------------------------------------------------------------------------
 
-    n_excess = count(rays(:, :, :)%meta /= -1, dim=1)
-    call update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, ghosts, &
-        last_meta, n_excess, launches)
+    n_excess = count(rays(:)%meta /= -1)
+    call get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, last_meta, &
+        n_excess, launches)
 
     n_excess = max(n_excess - n_max, 0)
     call prune(n_excess, rays)
 
-    do j = 1, j_max
-        do i = 1, i_max
-            add_at = 1
+    add_at = 1
+    do n = 1, n_launches
+        if (launches(n)%meta == -1) then
+            cycle
+        end if
 
-            do n = 1, n_launches
-                if (launches(n, i, j)%meta == -1) then
-                    cycle
-                end if
-
-                do s = add_at, n_max
-                    if (rays(s, i, j)%meta == -1) then
-                        add_at = s
-                        exit
-                    end if
-                end do
-
-                if (rays(add_at, i, j)%meta /= -1) then
-                    call error_mesg("msgwam_mod", "too many rays", FATAL)
-                end if
-
-                rays(add_at, i, j) = launches(n, i, j)
-
-                if (.not. is_stochastic) then
-                    g = launches(n, i, j)%ghost_id
-
-                    if (g /= -1) then
-                        if (ghosts(g, i, j) > 0) then
-                            rays(ghosts(g, i, j), i, j)%ghost_id = -1
-                        end if
-
-                        ghosts(g, i, j) = add_at
-                    end if
-                end if
-
-            end do
-
+        do s = add_at, n_max
+            if (rays(s)%meta == -1) then
+                add_at = s
+                exit
+            end if
         end do
+
+        if (rays(add_at)%meta /= -1) then
+            call error_mesg("msgwam", "too many rays", FATAL)
+        end if
+
+        rays(add_at) = launches(n)
+        if (.not. is_stochastic) then
+            gid = launches(n)%ghost_id
+
+            if (gid /= -1) then
+                if (ghosts(gid) > 0) then
+                    rays(ghosts(gid))%ghost_id = -1
+                end if
+
+                ghosts(gid) = add_at
+            end if
+        end if
     end do
 
 end subroutine check_source
-
-pure subroutine find_lowest_energies(n_find, rays, idx)
-
-    ! --------------------------------------------------------------------------
-    ! arguments
-    ! --------------------------------------------------------------------------
-    integer, dimension(i_max, j_max),            intent(in)  :: n_find
-    type(t_ray), dimension(n_max, i_max, j_max), intent(in)  :: rays
-    integer, dimension(:, :, :),                 intent(out) :: idx
-
-    ! --------------------------------------------------------------------------
-    ! local variables
-    ! --------------------------------------------------------------------------
-    real :: energy
-    integer :: add_at, i, j, n, s
-    real, dimension(size(idx, 1), i_max, j_max) :: lowest
-
-    ! --------------------------------------------------------------------------
-
-    lowest = huge(lowest)
-
-    do j = 1, j_max
-        do i = 1, i_max
-            do n = 1, n_max
-
-                associate(ray => rays(n, i, j))
-                    if ((ray%meta == -1) .or. ray%ghost_id /= -1) then
-                        cycle
-                    end if
-
-                    energy = ray%dens * ray%dm * ray%omega_hat * &
-                        (ray%r_hi - ray%r_lo)
-                end associate
-
-                add_at = -1
-                do s = 1, n_find(i, j)
-                    if (energy < lowest(s, i, j)) then
-                        add_at = s
-                    else
-                        exit
-                    end if
-                end do
-
-                if (add_at == -1) then
-                    cycle
-                end if
-
-                do s = 1, add_at - 1
-                    lowest(s, i, j) = lowest(s + 1, i, j)
-                    idx(s, i, j) = idx(s + 1, i, j)
-                end do
-
-                lowest(add_at, i, j) = energy
-                idx(add_at, i, j) = n
-            end do
-        end do
-    end do
-
-end subroutine find_lowest_energies
 
 subroutine init_source(lat_bounds)
 
@@ -191,7 +122,6 @@ subroutine init_source(lat_bounds)
     allocate(r_source(j_max))
 
     n_launches = n_source * max(1, int(dr_ghost / dr_source) + 1)
-    allocate(launches(n_launches, i_max, j_max))
 
     do n = 1, n_per_dir
         cp_arg(n) = (n - 0.5) * dc_source
@@ -216,88 +146,79 @@ subroutine init_source(lat_bounds)
 
 end subroutine init_source
 
-subroutine prune(n_excess, rays)
+pure subroutine find_lowest_energies(n_find, rays, idx)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    integer, dimension(i_max, j_max),            intent(in)    :: n_excess
-    type(t_ray), dimension(n_max, i_max, j_max), intent(inout) :: rays
+    integer,                       intent(in)  :: n_find
+    type(t_ray), dimension(n_max), intent(in)  :: rays
+    integer, dimension(n_find),    intent(out) :: idx
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i, j, n
-    integer, dimension(:, :, :), allocatable :: idx
-    real :: avg_age, n_deleted
+    real :: dr, energy
+    integer :: add_at, n, s
+    real, dimension(n_find) :: lowest
 
     ! --------------------------------------------------------------------------
 
-    if (print_prune_diag) then
-        n_deleted = 0.
-        avg_age = 0.
-    end if
+    lowest = huge(lowest)
 
-    if (maxval(n_excess) > 0) then
+    do n = 1, n_max
+        if ((rays(n)%meta == -1) .or. (rays(n)%ghost_id /= -1)) then
+            cycle
+        end if
 
-        allocate(idx(maxval(n_excess), i_max, j_max))
-        call find_lowest_energies(n_excess, rays, idx)
+        dr = rays(n)%r_hi - rays(n)%r_lo
+        energy = rays(n)%dens * rays(n)%dm * rays(n)%omega_hat * dr
 
-        do j = 1, j_max
-            do i = 1, i_max
-                do n = 1, n_excess(i, j)
-                    if (print_prune_diag) then
-                        n_deleted = n_deleted + 1.
-                        avg_age = avg_age + rays(idx(n, i, j), i, j)%age
-                    end if
-
-                    call delete_ray(rays(idx(n, i, j), i, j))
-                end do
-            end do
+        add_at = -1
+        do s = 1, n_find
+            if (energy < lowest(s)) then
+                add_at = s
+            else
+                exit
+            end if
         end do
 
-    end if
+        if (add_at == -1) then
+            cycle
+        end if
 
-    if (print_prune_diag) then
-        if (n_deleted > 0) then
-            avg_age = avg_age / n_deleted
-            n_deleted = n_deleted / real(i_max * j_max)
+        lowest(:add_at - 1) = lowest(2:add_at)
+        idx(:add_at - 1) = idx(2:add_at)
 
-            write(*, "(I0, A, F20.6, A, F20.6)") mpp_pe (), " pruned ", &
-                n_deleted, " rays with average age ", avg_age
-        else
-            write(*, "(I0, A)") mpp_pe(), " pruned nothing"
-        end if        
-    end if
+        lowest(add_at) = energy
+        idx(add_at) = n
+    end do
 
-end subroutine prune
+end subroutine find_lowest_energies
 
-subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
-    ghosts, last_meta, n_added, launches)
+subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
+    last_meta, n_added, launches)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(0:q_max + 1, i_max, j_max),       intent(in)    :: z_centers
-    real, dimension(q_max, i_max, j_max),             intent(in)    :: u_bar, &
-                                                                       v_bar, &
-                                                                       N2, G2
-    real,                                             intent(in)    :: dt
-    type(t_ray), dimension(n_max, i_max, j_max),      intent(in)    :: rays
-    integer, dimension(n_source, i_max, j_max),       intent(in)    :: ghosts
-    integer, dimension(i_max, j_max),                 intent(inout) :: last_meta
-    integer, dimension(i_max, j_max),                 intent(inout) :: n_added
-    type(t_ray), dimension(n_launches, i_max, j_max), intent(out)   :: launches
-    
+    integer,                            intent(in)    :: j
+    real, dimension(q_max),             intent(in)    :: z, u, v, N2, G2
+    real,                               intent(in)    :: dt
+    type(t_ray), dimension(n_max),      intent(in)    :: rays
+    integer, dimension(n_source),       intent(in)    :: ghosts
+    integer,                            intent(inout) :: last_meta, n_added
+    type(t_ray), dimension(n_launches), intent(out)   :: launches
+
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: add_at, dir, i, j, n, q_hi, q_lo, q_mid, s
-    real :: a, b, cg, cp_hat, G2_source, k, l, m, mag_cp, mag_wvn_hor, &
-        omega_hat, N2_source, prob, r, r_ghost, r_lo, r_hi, u, v
+    integer :: add_at, dir, n, q_source, s
+    real :: a, b, cg_r, cp_hat, dens, dm, G2_source, k, l, m, omega_hat, &
+        N2_source, prob, r, r_ghost, r_hi, r_lo, u_source, v_source, wvn_hor
 
+    real, dimension(n_source) :: rand
     real, dimension(q_max - 1) :: dz_inv
-    real, dimension(n_source, i_max, j_max) :: rand
 
     ! --------------------------------------------------------------------------
 
@@ -305,135 +226,135 @@ subroutine update_launches(z_centers, u_bar, v_bar, N2, G2, dt, rays, &
         call random_number(rand)
     end if
 
-    launches(:, :, :)%meta = -1
-    launches(:, :, :)%ghost_id = -1
+    launches(:)%meta = -1
+    launches(:)%ghost_id = -1
 
-    do j = 1, j_max
-        do i = 1, i_max
+    r_ghost = r_source(j) - dr_ghost
+    q_source = locate(z, r_source(j), 30)
+    dz_inv = 1. / (z(:q_max - 1) - z(2:))
 
-            associate( &
-                z => z_centers(1:q_max, i, j), &
-                u_col => u_bar(:, i, j), &
-                v_col => v_bar(:, i, j), &
-                N2_col => N2(:, i, j), &
-                G2_col => G2(:, i, j) &
-            )
+    call get_interp_coeffs(z, dz_inv, r_source(j), q_source, a, b)    
+    N2_source = a * N2(q_source) + b * N2(q_source + 1)
+    G2_source = a * G2(q_source) + b * G2(q_source + 1)
 
-            q_mid = locate(z, r_source(j), 30)
-            r_ghost = r_source(j) - dr_ghost
+    if (is_extrinsic(j)) then
+        u_source = a * u(q_source) + b * u(q_source + 1)
+        v_source = a * v(q_source) + b * v(q_source + 1)
+    end if
 
-            dz_inv = 1. / (z(:q_max - 1) - z(2:))
-            call get_interp_coeffs(z, dz_inv, r_source(j), q_mid, a, b)
+    add_at = 1
+    do dir = 1, 4
+        do n = 1, n_per_dir
+            s = (dir - 1) * n_per_dir + n
 
-            u = a * u_col(q_mid) + b * u_col(q_mid + 1)
-            v = a * v_col(q_mid) + b * v_col(q_mid + 1)
-
-            N2_source = a * N2_col(q_mid) + b * N2_col(q_mid + 1)
-            G2_source = a * G2_col(q_mid) + b * G2_col(q_mid + 1)
-
-            add_at = 1
-            do dir = 1, 4
-                do n = 1, n_per_dir
-                    s = (dir - 1) * n_per_dir + n
-
-                    if (.not. (is_stochastic .or. steady_state)) then
-                        if (ghosts(s, i, j) > 0) then
-                            if (rays(ghosts(s, i, j), i, j)%r_lo < r_ghost) then
-                                cycle
-                            end if
-                        end if
+            if (.not. (is_stochastic .or. steady_state)) then
+                if (ghosts(s) > 0) then
+                    if (rays(ghosts(s))%r_lo < r_ghost) then
+                        cycle
                     end if
+                end if
+            end if
 
-                    cp_hat = cp_arg(n) * (COS_PHI(dir) + SIN_PHI(dir))
-                    if (is_extrinsic(j)) then
-                        cp_hat = cp_hat &
-                            - u * abs(COS_PHI(dir)) &
-                            - v * abs(SIN_PHI(dir))
-                    end if
+            cp_hat = cp_arg(n) * (COS_PHI(dir) + SIN_PHI(dir))
+            if (is_extrinsic(j)) then
+                cp_hat = cp_hat &
+                    - u_source * abs(COS_PHI(dir)) &
+                    - v_source * abs(SIN_PHI(dir))
 
-                    mag_wvn_hor = omega_hat_source / cp_hat
-                    k = mag_wvn_hor * abs(COS_PHI(dir))
-                    l = mag_wvn_hor * abs(SIN_PHI(dir))
+            end if
 
-                    if (is_stochastic .or. steady_state) then
-                        r_hi = r_source(j)
-                    else if (ghosts(s, i, j) > 0) then
-                        r_hi = rays(ghosts(s, i, j), i, j)%r_lo
-                        r_hi = min(r_hi, r_source(j))
-                    else
-                        r_hi = r_ghost
-                    end if
+            wvn_hor = omega_hat_source / cp_hat
+            k = wvn_hor * abs(COS_PHI(dir))
+            l = wvn_hor * abs(SIN_PHI(dir))
 
-                    do
+            if (is_stochastic .or. steady_state) then
+                r_hi = r_source(j)
+            else if (ghosts(s) > 0) then
+                r_hi = rays(ghosts(s))%r_lo
+                r_hi = min(r_hi, r_source(j))
+            else
+                r_hi = r_ghost
+            end if
 
-                        r_lo = r_hi - dr_source
-                        r = 0.5 * (r_lo + r_hi)
+            m = get_m(k, l, omega_hat_source ** 2, N2_source, f2(j))
+            call get_cg_r(m, k ** 2 + l ** 2, m ** 2 + G2_source, N2_source, &
+                f2(j), omega_hat, cg_r)
 
-                        q_hi = locate(z, r_hi, 30)
-                        q_lo = locate(z, r_lo, 30)
-                        q_mid = locate(z, r, 30)
-                    
-                        m = get_m(k, l, omega_hat_source ** 2, N2_source, f2(j))
-                        call get_cg_r(m, k ** 2 + l ** 2, m ** 2, N2_source, &
-                            f2(j), G2_source, omega_hat, cg)
+            if (is_stochastic) then
+                prob = epsilon * cg_r * dt / dr_source
+                if (rand(s) .ge. prob) then
+                    cycle
+                end if
+            end if
 
-                        if (is_stochastic) then
-                            prob = epsilon * cg * dt / dr_source
-                            if (rand(s, i, j) .ge. prob) then
-                                cycle
-                            end if
-                        end if
+            dm = get_dm(m, dc_source, N2_source)
+            dens = flux(n, j) / abs(wvn_hor * dm * cg_r)
 
-                        associate(ray => launches(add_at, i, j))
+            do
+                r_lo = r_hi - dr_source
+                r = 0.5 * (r_lo + r_hi)
 
-                            ray%r_hi = r_hi
-                            ray%r_lo = r_lo
+                launches(add_at)%r_hi = r_hi
+                launches(add_at)%r_lo = r_lo
 
-                            ray%k = k
-                            ray%l = l
-                            ray%m = m
+                launches(add_at)%k = k
+                launches(add_at)%l = l
+                launches(add_at)%m = m
 
-                            ray%dm = get_dm(m, dc_source, N2_source)
-                            ray%dens = flux(n, j) / abs(mag_wvn_hor * ray%dm * cg)
+                launches(add_at)%dm = dm
+                launches(add_at)%dens = dens
 
-                            ray%cg_r = cg
-                            ray%omega_hat = omega_hat
-                            ray%G2 = G2_source
+                launches(add_at)%cg_r = cg_r
+                launches(add_at)%omega_hat = omega_hat
+                launches(add_at)%G2 = G2_source
 
-                            ray%age = 0
-                            ray%meta = last_meta(i, j)
+                launches(add_at)%age = 0
+                launches(add_at)%meta = last_meta
+                launches(add_at)%ghost_id = merge(s, -1, r_lo <= r_ghost)
 
-                            ray%q_hi = q_hi
-                            ray%q_lo = q_lo
-                            ray%q_mid = q_mid
+                launches(add_at)%q_hi = locate(z, r_hi, 30)
+                launches(add_at)%q_lo = locate(z, r_lo, 30)
+                launches(add_at)%q_mid = locate(z, r, 30)
 
-                            last_meta(i, j) = last_meta(i, j) + 1
-                            n_added(i, j) = n_added(i, j) + 1
-                            add_at = add_at + 1
+                last_meta = last_meta + 1
+                n_added = n_added + 1
+                add_at = add_at + 1
 
-                        if (is_stochastic .or. steady_state) then
-                            exit
-                        end if
+                if (is_stochastic .or. steady_state .or. (r_lo <= r_ghost)) then
+                    exit
+                end if
 
-                        if (r_lo <= r_ghost) then
-                            ray%ghost_id = s
-                            exit
-                        end if
-
-                        end associate
-
-                        r_hi = r_lo
-
-                    end do
-
-                end do
+                r_hi = r_lo
             end do
-
-            end associate
 
         end do
     end do
 
-end subroutine update_launches
+end subroutine get_launches
+
+pure subroutine prune(n_excess, rays)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    integer,                       intent(in)    :: n_excess
+    type(t_ray), dimension(n_max), intent(inout) :: rays
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: n
+    integer, dimension(n_excess) :: idx
+
+    ! --------------------------------------------------------------------------
+
+    if (n_excess > 0) then
+        call find_lowest_energies(n_excess, rays, idx)
+        do n = 1, n_excess
+            call delete_ray(rays(idx(n)))
+        end do
+    end if
+
+end subroutine prune
 
 end module msgwam_source_mod
