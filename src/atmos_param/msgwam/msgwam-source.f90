@@ -20,7 +20,7 @@ use msgwam_utils_mod,     only: get_interp_coeffs, locate
 implicit none
 private
 
-public check_source, init_source, r_source
+public LONG_KIND, check_source, init_source, r_source, t_prune_diag
 
 logical :: is_stochastic
 integer :: n_launches, n_per_dir
@@ -33,9 +33,17 @@ real, dimension(:, :), allocatable :: flux
 real, dimension(4) :: COS_PHI = (/ 1., 0., -1., 0. /)
 real, dimension(4) :: SIN_PHI = (/ 0., 1., 0., -1. /)
 
+integer, parameter :: LONG_KIND = selected_int_kind(12)
+
+type :: t_prune_diag
+    integer :: n_pruned
+    integer (kind=LONG_KIND) :: total_age
+    real :: total_flux, total_r
+end type t_prune_diag
+
 contains
 
-subroutine check_source(j, z, u, v, N2, G2, dt, rays, ghosts, last_meta)
+subroutine check_source(j, z, u, v, N2, G2, dt, rays, ghosts, last_meta, diag)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -46,6 +54,7 @@ subroutine check_source(j, z, u, v, N2, G2, dt, rays, ghosts, last_meta)
     type(t_ray), dimension(n_max), intent(inout) :: rays
     integer, dimension(n_source),  intent(inout) :: ghosts
     integer,                       intent(inout) :: last_meta
+    type(t_prune_diag),            intent(out)   :: diag
 
     ! --------------------------------------------------------------------------
     ! local variables
@@ -60,7 +69,7 @@ subroutine check_source(j, z, u, v, N2, G2, dt, rays, ghosts, last_meta)
         n_excess, launches)
 
     n_excess = max(n_excess - n_max, 0)
-    call prune(n_excess, rays)
+    call prune(sum(flux(:, j)), n_excess, rays, diag)
 
     add_at = 1
     do n = 1, n_launches
@@ -332,25 +341,50 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
 
 end subroutine get_launches
 
-pure subroutine prune(n_excess, rays)
+ subroutine prune(norm, n_excess, rays, diag)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
+    real,                          intent(in)    :: norm
     integer,                       intent(in)    :: n_excess
     type(t_ray), dimension(n_max), intent(inout) :: rays
+    type(t_prune_diag),            intent(out)   :: diag
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: n
     integer, dimension(n_excess) :: idx
+    real :: flux, r
 
     ! --------------------------------------------------------------------------
 
+    diag%n_pruned = 0
+    diag%total_age = 0
+    diag%total_flux = 0.
+    diag%total_r = 0.
+
     if (n_excess > 0) then
         call find_lowest_energies(n_excess, rays, idx)
+
+        if (print_prune_diag) then
+            do n = 1, n_excess
+                diag%n_pruned = diag%n_pruned + 1
+                diag%total_age = diag%total_age + rays(idx(n))%age
+
+                r = 0.5 * (rays(idx(n))%r_lo + rays(idx(n))%r_hi)
+                flux = sqrt(rays(idx(n))%k ** 2 + rays(idx(n))%l ** 2)
+                flux = flux * rays(idx(n))%dens * rays(idx(n))%dm
+                flux = flux * rays(idx(n))%cg_r
+
+                diag%total_flux = diag%total_flux + abs(flux / norm)
+                diag%total_r = diag%total_r + r / 1000.
+            end do
+        end if
+
         do n = 1, n_excess
+            !DIR$ NOINLINE
             call delete_ray(rays(idx(n)))
         end do
     end if

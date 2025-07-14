@@ -90,7 +90,7 @@ def plot_climatology(ds: xr.Dataset, season: Optional[str]=None) -> None:
     suffix = season if season else 'annual'
     plt.savefig(f'plots/climatology-{suffix}.png', dpi=400)
 
-def plot_pruning(_, fname: str) -> None:
+def plot_pruning(ds: xr.Dataset, fname: str) -> None:
     """Plot pruning as a function of time."""
 
     n_days = 30
@@ -99,6 +99,8 @@ def plot_pruning(_, fname: str) -> None:
 
     ns = np.zeros((32, n_steps))
     ages = np.zeros((32, n_steps))
+    fluxes = np.zeros((32, n_steps))
+    heights = np.zeros((32, n_steps))
     j = np.zeros(32).astype(int)
 
     with open(fname) as f:
@@ -106,41 +108,65 @@ def plot_pruning(_, fname: str) -> None:
             if not 'pruned' in line:
                 continue
 
-            pe, *parts = line.split()
-            pe = int(pe)
+            keep = lambda s: s.replace('.', '').isdecimal()
+            parts = list(filter(keep, line.split()))
+            flux, height = map(float, parts[-2:])
+            pe, n, age = map(int, parts[:3])
 
-            if not ('nothing' in line):
-                ns[pe, j[pe]] = float(parts[1])
-                ages[pe, j[pe]] = float(parts[6])
+            ns[pe, j[pe]] = n
+            ages[pe, j[pe]] = age
+            fluxes[pe, j[pe]] = flux
+            heights[pe, j[pe]] = height
 
             j[pe] = j[pe] + 1
 
     n_resample = dt_resample // _DT
-    ages = ages.reshape(32, -1, n_resample)
     ns = ns.reshape(32, -1, n_resample)
+    ages = ages.reshape(32, -1, n_resample)
+    fluxes = fluxes.reshape(32, -1, n_resample)
+    heights = heights.reshape(32, -1, n_resample)
 
-    ages = _weighted_mean(ages, ns, 2)
-    ns = ns.sum(axis=2)
+    ns = ns.sum(axis=(0, 2))
+    ages = ages.sum(axis=(0, 2))
+    fluxes = fluxes.sum(axis=(0, 2))
 
-    ages = _weighted_mean(ages, ns, axis=0)
-    ns = ns.mean(axis=0)
+    heights = heights.sum(axis=(0, 2))
+    per_col = ns / (len(ds['lat']) * len(ds['lon']))
+    idx = ns > 0
 
-    fig, axes = plt.subplots(ncols=2)
-    fig.set_size_inches(9, 3)
+    avg_age = np.zeros_like(ages)
+    avg_age[idx] = ages[idx] / ns[idx]
+
+    avg_flux = np.zeros_like(fluxes)
+    avg_flux[idx] = fluxes[idx] / ns[idx]
+
+    avg_height = np.zeros_like(heights)
+    avg_height[idx] = heights[idx] / ns[idx]
 
     days = np.linspace(0, n_days, len(ns))
-    axes[1].plot(days, ages / 86400, color='k')
-    axes[0].plot(days, ns, color='k')
+    fig, axes = plt.subplots(nrows=2, ncols=2)
+    fig.set_size_inches(9, 6)
+    axes = axes.flatten()
+
+    axes[0].plot(days, per_col, color='k')
+    axes[1].plot(days, avg_age / 86400, color='k')
+    axes[2].plot(days, 100 * avg_flux, color='k')
+    axes[3].plot(days, avg_height, color='k')
 
     for ax in axes:
         ax.set_xlim(days.min(), days.max())
         ax.set_xlabel('integration day')
+        ax.grid(color='lightgray')
 
     axes[0].set_ylim(0, 200)
     axes[1].set_ylim(0, 5)
+    axes[2].set_ylim(0, 5)
+    axes[3].set_ylim(5, 60)
 
     axes[0].set_ylabel(f'prunes per {dt_resample // 3600} hours')
     axes[1].set_ylabel('age of pruned rays (days)')
+    axes[2].set_ylabel('flux of pruned rays (%)')
+    axes[3].set_ylabel('height of pruned rays (km)')
 
     plt.tight_layout()
     plt.savefig('plots/pruning.png', dpi=400)
@@ -217,7 +243,7 @@ def show_statistics(ds: xr.Dataset) -> None:
 def _get_uv_name(ds: xr.Dataset, comp: str='u') -> str:
     """Get the zonal component of the wind from a file."""
 
-    return [s for s in [f'{comp}comp', f'{comp}_gwf'] if s in ds][0]
+    return [s for s in [f'{comp}', f'{comp}_gwf'] if s in ds][0]
 
 def _get_yticks() -> tuple[np.ndarray, np.ndarray]:
     """Get log pressure coordinate ticks and labels for plots."""
