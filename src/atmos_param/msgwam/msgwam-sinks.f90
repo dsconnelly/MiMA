@@ -7,6 +7,7 @@ module msgwam_sinks_mod
 use msgwam_constants_mod, only: break_waves, f2, max_age, min_flux, mu, n_max, &
                                 n_sponge, q_max
 use msgwam_rays_mod,      only: delete_ray, t_ray
+use msgwam_source_mod,    only: r_source
 use msgwam_utils_mod,     only: get_interp_coeffs
 
 implicit none
@@ -16,20 +17,21 @@ public apply_breaking, apply_dissipation, check_boundaries
 
 contains
 
-pure subroutine apply_breaking(z_faces, rho, rays)
+pure subroutine apply_breaking(j, z_faces, rho, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
-    real, dimension(q_max + 1),    intent(in) :: z_faces
-    real, dimension(q_max),        intent(in) :: rho
+    integer,                       intent(in)    :: j
+    real, dimension(q_max + 1),    intent(in)    :: z_faces
+    real, dimension(q_max),        intent(in)    :: rho
     type(t_ray), dimension(n_max), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: n, q, q_hi, q_lo
-    real :: D, dz, frac, max_kappa, wvn_hor_sq, wvn_ver_sq, z_hi, z_lo
+    real :: D, dz, frac, max_kappa, r, wvn_hor_sq, wvn_ver_sq, z_hi, z_lo
     
     real, dimension(q_max) :: num, den, kappa
     real, dimension(n_max) :: wvn_sq
@@ -79,6 +81,11 @@ pure subroutine apply_breaking(z_faces, rho, rays)
 
     do n = 1, n_max
         if (rays(n)%meta == -1) then
+            cycle
+        end if
+
+        r = 0.5 * (rays(n)%r_lo + rays(n)%r_hi)
+        if ((r < r_source(j)) .and. (rays(n)%m < 0)) then
             cycle
         end if
 
@@ -145,6 +152,10 @@ pure subroutine apply_dissipation(j, z_faces, z, rho, dt, rays)
         end if
 
         r = 0.5 * (rays(n)%r_lo + rays(n)%r_hi)
+        if ((r < r_source(j)) .and. (rays(n)%m < 0)) then
+            cycle
+        end if
+
         if (n_sponge > 0 .and. r > z_sponge) then
             damping = 1 - rays(n)%cg_r * dt / (z_zero - r)
             damping = min(1., max(0., damping))
@@ -166,11 +177,12 @@ pure subroutine apply_dissipation(j, z_faces, z, rho, dt, rays)
 
 end subroutine apply_dissipation
 
-pure subroutine check_boundaries(z_centers, rays)
+pure subroutine check_boundaries(j, z_centers, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
+    integer,                       intent(in)    :: j
     real, dimension(0:q_max + 1),  intent(in)    :: z_centers
     type(t_ray), dimension(n_max), intent(inout) :: rays
 
@@ -179,7 +191,7 @@ pure subroutine check_boundaries(z_centers, rays)
     ! --------------------------------------------------------------------------
     integer :: n
     logical :: delete
-    real :: flux, wvn, z_hi, z_lo
+    real :: flux, r, wvn, z_hi, z_lo
 
     ! --------------------------------------------------------------------------
 
@@ -187,7 +199,12 @@ pure subroutine check_boundaries(z_centers, rays)
     z_lo = z_centers(q_max + 1)
 
     do n = 1, n_max
-        if ((rays(n)%meta == -1) .or. (rays(n)%ghost_id /= -1)) then
+        if (rays(n)%meta == -1) then
+            cycle
+        end if
+
+        r = 0.5 * (rays(n)%r_lo + rays(n)%r_hi)
+        if ((r < r_source(j)) .and. (rays(n)%m < 0)) then
             cycle
         end if
 

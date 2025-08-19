@@ -38,7 +38,8 @@ pure subroutine take_RK4_step(j, z, u, v, N2, G2, dt, rays)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: n
+    integer :: n, q_src
+    real :: a, b, G2_src, N2_src
     real, dimension(q_max - 1) :: dz_inv
     real, dimension(q_max) :: du_dz, dv_dz, dN2_dz, dG2_dz
 
@@ -47,19 +48,24 @@ pure subroutine take_RK4_step(j, z, u, v, N2, G2, dt, rays)
     dz_inv = 1. / (z(:q_max - 1) - z(2:))
     call update_mean_gradients(z, u, v, N2, G2, du_dz, dv_dz, dN2_dz, dG2_dz)
 
+    q_src = locate(z, r_source(j), 30)
+    call get_interp_coeffs(z, dz_inv, r_source(j), q_src, a, b)
+    N2_src = a * N2(q_src) + b * N2(q_src + 1)
+    G2_src = a * G2(q_src) + b * G2(q_src + 1)
+
     do n = 1, n_max
         if (rays(n)%meta == -1) then
             cycle
         end if
 
-        call take_RK4_step_ray(j, z, dz_inv, N2, G2, du_dz, dv_dz, &
-            dN2_dz, dG2_dz, dt, rays(n))
+        call take_RK4_step_ray(j, z, dz_inv, N2, G2, N2_src, G2_src, du_dz, &
+            dv_dz, dN2_dz, dG2_dz, dt, rays(n))
     end do
 
 end subroutine take_RK4_step
 
-pure subroutine take_RK4_step_ray(j, z, dz_inv, N2_col, G2_col, &
-    du_dz, dv_dz, dN2_dz, dG2_dz, dt, ray)
+pure subroutine take_RK4_step_ray(j, z, dz_inv, N2_col, G2_col, N2_src, &
+    G2_src, du_dz, dv_dz, dN2_dz, dG2_dz, dt, ray)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -67,6 +73,7 @@ pure subroutine take_RK4_step_ray(j, z, dz_inv, N2_col, G2_col, &
     integer,                    intent(in)    :: j
     real, dimension(q_max),     intent(in)    :: z, N2_col, G2_col, &
                                                  du_dz, dv_dz, dN2_dz, dG2_dz
+    real,                       intent(in)    :: N2_src, G2_src
     real, dimension(q_max - 1), intent(in)    :: dz_inv
     real,                       intent(in)    :: dt
     type(t_ray),                intent(inout) :: ray
@@ -74,11 +81,12 @@ pure subroutine take_RK4_step_ray(j, z, dz_inv, N2_col, G2_col, &
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: stage
+    integer :: q_src, stage
     type(t_inc), dimension(0:4) :: incs
+    logical :: notouch
 
-    real :: a, area, b, cg_hi, cg_lo, dG2_dr, dN2_dr, du_dr, dv_dr, G2, ignore, &
-        K2pG2_inv, m2, N2, omega_hat_sq, r, swap_r, wvn_hor_sq
+    real :: a, area, b, cg_hi, cg_lo, dG2_dr, dN2_dr, du_dr, dv_dr, G2, &
+        ignore, K2pG2_inv, m2, N2, omega_hat_sq, r, swap_r, wvn_hor_sq
 
     ! --------------------------------------------------------------------------
 
@@ -93,22 +101,27 @@ pure subroutine take_RK4_step_ray(j, z, dz_inv, N2_col, G2_col, &
 
     do stage = 1, 4
         m2 = ray%m ** 2
+        notouch = (r < r_source(j)) .and. (ray%m < 0)
 
-        call get_interp_coeffs(z, dz_inv, ray%r_hi, ray%q_hi, a, b)
-        N2 = a * N2_col(ray%q_hi) + b * N2_col(ray%q_hi + 1)
-        G2 = a * G2_col(ray%q_hi) + b * G2_col(ray%q_hi + 1)
-        call get_cg_r(ray%m, wvn_hor_sq, m2 + G2, N2, f2(j), ignore, cg_hi)
+        if (notouch) then
+            call get_cg_r(ray%m, wvn_hor_sq, m2 + G2_src, N2_src, f2(j), &
+                ignore, cg_hi)
 
-        call get_interp_coeffs(z, dz_inv, ray%r_lo, ray%q_lo, a, b)
-        N2 = a * N2_col(ray%q_lo) + b * N2_col(ray%q_lo + 1)
-        G2 = a * G2_col(ray%q_lo) + b * G2_col(ray%q_lo + 1)
-        call get_cg_r(ray%m, wvn_hor_sq, m2 + G2, N2, f2(j), ignore, cg_lo)
-
-        if (r < r_source(j)) then
-            incs(stage)%r_lo = dt * 0.5 * (cg_lo + cg_hi)
+            incs(stage)%r_lo = dt * cg_hi
             incs(stage)%r_hi = incs(stage)%r_lo
             incs(stage)%m = 0.
+
         else
+
+            call get_interp_coeffs(z, dz_inv, ray%r_hi, ray%q_hi, a, b)
+            N2 = a * N2_col(ray%q_hi) + b * N2_col(ray%q_hi + 1)
+            G2 = a * G2_col(ray%q_hi) + b * G2_col(ray%q_hi + 1)
+            call get_cg_r(ray%m, wvn_hor_sq, m2 + G2, N2, f2(j), ignore, cg_hi)
+
+            call get_interp_coeffs(z, dz_inv, ray%r_lo, ray%q_lo, a, b)
+            N2 = a * N2_col(ray%q_lo) + b * N2_col(ray%q_lo + 1)
+            G2 = a * G2_col(ray%q_lo) + b * G2_col(ray%q_lo + 1)
+            call get_cg_r(ray%m, wvn_hor_sq, m2 + G2, N2, f2(j), ignore, cg_lo)
 
             incs(stage)%r_lo = dt * cg_lo
             incs(stage)%r_hi = dt * cg_hi
@@ -170,10 +183,15 @@ pure subroutine take_RK4_step_ray(j, z, dz_inv, N2_col, G2_col, &
     call get_interp_coeffs(z, dz_inv, r, ray%q_mid, a, b)
     N2 = a * N2_col(ray%q_mid) + b * N2_col(ray%q_mid + 1)
     G2 = a * G2_col(ray%q_mid) + b * G2_col(ray%q_mid + 1)
-
     ray%G2 = G2
-    call get_cg_r(ray%m, wvn_hor_sq, ray%m ** 2 + G2, N2, f2(j), &
-        ray%omega_hat, ray%cg_r)
+
+    if (r < r_source(j)) then
+        call get_cg_r(ray%m, wvn_hor_sq, ray%m ** 2 + G2_src, N2_src, f2(j), &
+            ray%omega_hat, ray%cg_r)
+    else
+        call get_cg_r(ray%m, wvn_hor_sq, ray%m ** 2 + G2, N2, f2(j), &
+            ray%omega_hat, ray%cg_r)
+    end if
 
 end subroutine take_RK4_step_ray
 

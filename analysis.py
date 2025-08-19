@@ -178,7 +178,7 @@ def plot_qbo(ds: xr.Dataset) -> None:
     fig, (ax, cax) = plt.subplots(ncols=2, width_ratios=widths)
     fig.set_size_inches(sum(widths), 3)
 
-    tropics = abs(ds['lat']) <= 15
+    tropics = abs(ds['lat']) <= 10
     ds = ds.isel(lat=tropics).mean(('lat', 'lon'))
     u = ds[_get_uv_name(ds)]
 
@@ -215,18 +215,86 @@ def plot_qbo(ds: xr.Dataset) -> None:
     plt.tight_layout()
     plt.savefig('plots/qbo.png', dpi=400)
 
+def plot_summary(ds: xr.Dataset) -> None:
+    """Plot the zonal wind climatologies and QBO time series in one figure."""
+
+    widths = [4.5, 4.5, 4.5, 0.2]
+    fig, axes = plt.subplots(ncols=len(widths), width_ratios=widths)
+    fig.set_size_inches(sum(widths), 3)
+    cax, axes = axes[-1], axes[:-1]
+
+    lat = np.linspace(-90, 90, len(ds['lat']))
+    y = np.log10(ds['pfull'].values)
+    xticks = np.linspace(-90, 90, 7)
+    yticks, ylabels = _get_yticks()
+    amax = 80
+
+    for ax, season in zip(axes, ['DJF', 'JJA']):
+        keep = (ds['time.year'] > 1) & (ds['time.season'] == season)
+        u = ds[_get_uv_name(ds)].isel(time=keep).mean(('time', 'lon'))
+
+        ax.pcolormesh(
+            lat, y, u.values,
+            vmin=-amax, vmax=amax,
+            shading='nearest',
+            cmap='RdBu_r'
+        )
+
+        ax.set_xlim(-90, 90)
+        ax.set_xticks(xticks)
+        ax.set_xlabel('latitude')
+
+    tropics = abs(ds['lat']) <= 10
+    u = ds[_get_uv_name(ds)].isel(lat=tropics).mean(('lat', 'lon'))
+    years = cftime.date2num(ds['time'].values, _UNITS, calendar=_CALENDAR) / 360
+
+    img = axes[-1].pcolormesh(
+        years, y, u.values.T,
+        vmin=-amax, vmax=amax,
+        shading='nearest',
+        cmap='RdBu_r'
+    )
+
+    n_years = int(years.max()) + 1
+    xticks = np.arange(0, n_years + 1)
+
+    axes[-1].set_xticks(xticks)
+    axes[-1].set_xlim(0, n_years)
+    axes[-1].set_xlabel('years')
+
+    cbar = plt.colorbar(img, cax=cax)
+    ticks = np.linspace(-amax, amax, 5)
+    cbar.set_label('m / s')
+    cbar.set_ticks(ticks)
+
+    for i, ax in enumerate(axes):
+        ax.set_title(f'({chr(i + 97)})')
+        ax.set_yticks(yticks)
+        ax.invert_yaxis()
+
+        if i == 0:
+            ax.set_yticklabels(ylabels)
+            ax.set_ylabel('pressure (hPa)')
+
+        else:
+            ax.set_yticklabels([])
+
+    plt.tight_layout()
+    plt.savefig('plots/summary.png', dpi=400)
+
 def show_statistics(ds: xr.Dataset) -> None:
     """Print some statistics about stratospheric variability."""
 
     u = ds[_get_uv_name(ds)].sel(pfull=10, method='nearest')
 
-    tropics = abs(ds['lat']) < 15
+    tropics = abs(ds['lat']) < 10
     u_qbo = u.isel(lat=tropics).mean(('lat', 'lon')).values
     days = cftime.date2num(u['time'], _UNITS, calendar=_CALENDAR)
 
     crossings = _get_zero_crossings(u_qbo, days)
-    period = np.diff(crossings).mean() / 360
-    print(f'    QBO period is {period:.3f} years')
+    print(np.diff(crossings) / 30)
+    period = np.diff(crossings).mean() / 30
+    print(f'    QBO period is {period:.3f} months')
 
     for season in ['DJF', 'JJA']:
         keep = (ds['time.season'] == season)
@@ -243,7 +311,7 @@ def show_statistics(ds: xr.Dataset) -> None:
 def _get_uv_name(ds: xr.Dataset, comp: str='u') -> str:
     """Get the zonal component of the wind from a file."""
 
-    return [s for s in [f'{comp}', f'{comp}_gwf'] if s in ds][0]
+    return [s for s in [comp, f'{comp}comp', f'{comp}_gwf'] if s in ds][0]
 
 def _get_yticks() -> tuple[np.ndarray, np.ndarray]:
     """Get log pressure coordinate ticks and labels for plots."""
@@ -258,7 +326,7 @@ def _get_zero_crossings(u: np.ndarray, days: np.ndarray) -> np.ndarray:
 
     u_hat = np.fft.rfft(u)
     freqs = np.fft.rfftfreq(len(u), days[1] - days[0])
-    u_hat[freqs > 1 / 120] = 0
+    u_hat[freqs > 1 / 240] = 0
     
     u = np.fft.irfft(u_hat, n=len(u))
     return days[:-1][(u[:-1] > 0) & (u[1:] < 0)]

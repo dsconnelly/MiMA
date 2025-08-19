@@ -69,7 +69,7 @@ subroutine check_source(j, z, u, v, N2, G2, dt, rays, ghosts, last_meta, diag)
         n_excess, launches)
 
     n_excess = max(n_excess - n_max, 0)
-    call prune(sum(flux(:, j)), n_excess, rays, diag)
+    call prune(j, sum(flux(:, j)), n_excess, rays, diag)
 
     add_at = 1
     do n = 1, n_launches
@@ -155,11 +155,12 @@ subroutine init_source(lat_bounds)
 
 end subroutine init_source
 
-pure subroutine find_lowest_energies(n_find, rays, idx)
+pure subroutine find_lowest_energies(j, n_find, rays, idx)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
+    integer,                       intent(in)  :: j
     integer,                       intent(in)  :: n_find
     type(t_ray), dimension(n_max), intent(in)  :: rays
     integer, dimension(n_find),    intent(out) :: idx
@@ -167,7 +168,7 @@ pure subroutine find_lowest_energies(n_find, rays, idx)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    real :: dr, energy
+    real :: dr, energy, r
     integer :: add_at, n, s
     real, dimension(n_find) :: lowest
 
@@ -176,7 +177,12 @@ pure subroutine find_lowest_energies(n_find, rays, idx)
     lowest = huge(lowest)
 
     do n = 1, n_max
-        if ((rays(n)%meta == -1) .or. (rays(n)%ghost_id /= -1)) then
+        if (rays(n)%meta == -1) then
+            cycle
+        end if
+
+        r = 0.5 * (rays(n)%r_lo + rays(n)%r_hi)
+        if ((r < r_source(j)) .and. (rays(n)%m < 0)) then
             cycle
         end if
 
@@ -341,11 +347,12 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
 
 end subroutine get_launches
 
- subroutine prune(norm, n_excess, rays, diag)
+pure subroutine prune(j, norm, n_excess, rays, diag)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
+    integer,                       intent(in)    :: j
     real,                          intent(in)    :: norm
     integer,                       intent(in)    :: n_excess
     type(t_ray), dimension(n_max), intent(inout) :: rays
@@ -366,7 +373,7 @@ end subroutine get_launches
     diag%total_r = 0.
 
     if (n_excess > 0) then
-        call find_lowest_energies(n_excess, rays, idx)
+        call find_lowest_energies(j, n_excess, rays, idx)
 
         if (print_prune_diag) then
             do n = 1, n_excess
