@@ -12,7 +12,7 @@ set echo
 #--------------------------------------------------------------------------------------------------------
 # define variables
 set platform  = greene                                # A unique identifier for your platform
-set npes      = 1                                     # number of processors
+set npes      = 8                                     # number of processors
 set template  = $cwd/../bin/mkmf.template.$platform   # path to template for your platform
 set mkmf      = $cwd/../bin/mkmf                      # path to executable mkmf
 set sourcedir = $cwd/../src                           # path to directory containing model source code

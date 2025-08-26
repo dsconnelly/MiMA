@@ -4,8 +4,8 @@ module msgwam_sinks_mod
 ! This module implements ray volume dissipation and breaking.
 ! ==============================================================================
 
-use msgwam_constants_mod, only: break_waves, f2, max_age, min_flux, mu, n_max, &
-                                n_sponge, q_max
+use msgwam_constants_mod, only: break_waves, epsilon, f2, max_age, min_flux, &
+                                mu, n_max, n_sponge, q_max
 use msgwam_rays_mod,      only: delete_ray, t_ray
 use msgwam_source_mod,    only: r_source
 use msgwam_utils_mod,     only: get_interp_coeffs
@@ -55,7 +55,7 @@ pure subroutine apply_breaking(j, z_faces, rho, rays)
         wvn_sq(n) = wvn_hor_sq + wvn_ver_sq
 
         D = rays(n)%dens * rays(n)%dm * wvn_hor_sq * wvn_ver_sq / &
-            rays(n)%omega_hat
+            (epsilon * rays(n)%omega_hat)
 
         q_hi = max(1, rays(n)%q_hi - 1)
         q_lo = min(q_max, rays(n)%q_lo + 1)
@@ -108,6 +108,7 @@ pure subroutine apply_breaking(j, z_faces, rho, rays)
             end if
         end do
 
+        max_kappa = epsilon * max_kappa
         rays(n)%dens = rays(n)%dens * max(0., 1 - wvn_sq(n) * max_kappa)
     end do
 

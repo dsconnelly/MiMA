@@ -81,7 +81,7 @@ pure subroutine take_RK4_step_ray(j, z, dz_inv, N2_col, G2_col, N2_src, &
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: q_src, stage
+    integer :: stage
     type(t_inc), dimension(0:4) :: incs
     logical :: notouch
 

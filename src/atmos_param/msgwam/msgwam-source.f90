@@ -10,17 +10,17 @@ use fms_mod,              only: error_mesg, FATAL, mpp_pe
 
 use msgwam_constants_mod, only: boundary_flux_ex, boundary_flux_tr, cp_max, &
                                 cp_width_ex, cp_width_tr, dr_ghost, dr_source, &
-                                epsilon, f2, j_max, lat_tropics, n_max, &
-                                n_source, print_prune_diag, q_max, &
-                                r_source_ex, r_source_tr, source_dlat, &
-                                steady_state, T_hat_source
+                                epsilon, f2, i_max, j_max, lat_tropics, n_max, &
+                                n_source, print_prune_diag, prune_mode, q_max, &
+                                source_dlat, T_hat_source
 use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
 implicit none
 private
 
-public LONG_KIND, check_source, init_source, r_source, t_prune_diag
+public LONG_KIND, check_source, init_source, r_source, &
+    t_prune_diag
 
 logical :: is_stochastic
 integer :: n_launches, n_per_dir
@@ -34,6 +34,7 @@ real, dimension(4) :: COS_PHI = (/ 1., 0., -1., 0. /)
 real, dimension(4) :: SIN_PHI = (/ 0., 1., 0., -1. /)
 
 integer, parameter :: LONG_KIND = selected_int_kind(12)
+integer, parameter :: MAX_LAUNCHES = 4
 
 type :: t_prune_diag
     integer :: n_pruned
@@ -114,15 +115,16 @@ subroutine init_source(lat_bounds)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: j, n
-    real :: arg, lat, total
+    integer :: j, n, p
+    real :: arg, closest, dist, lat, total
+    real, dimension(64) :: lat_in, r_source_in
 
     ! --------------------------------------------------------------------------
 
     n_per_dir = n_source / 4
     dc_source = cp_max / n_per_dir
     omega_hat_source = 2 * PI / T_hat_source
-    is_stochastic = epsilon > 0.
+    is_stochastic = epsilon < 1.
 
     allocate(cp_arg(n_per_dir))
     allocate(is_extrinsic(j_max))
@@ -136,14 +138,15 @@ subroutine init_source(lat_bounds)
         cp_arg(n) = (n - 0.5) * dc_source
     end do
 
+    call read_source_level_file(lat_in, r_source_in)
+
     do j = 1, j_max
-        lat = abs(90 * (lat_bounds(j) + lat_bounds(j + 1)) / PI)
-        arg = (lat - (lat_tropics - source_dlat)) / (2 * source_dlat)
+        lat = 90 * (lat_bounds(j) + lat_bounds(j + 1)) / PI
+        arg = (abs(lat) - (lat_tropics - source_dlat)) / (2 * source_dlat)
         arg = min(max(arg, 0.), 1.) 
 
-        is_extrinsic(j) = lat > lat_tropics
+        is_extrinsic(j) = abs(lat) > lat_tropics
         cp_width(j) = cp_width_tr * (1 - arg) + cp_width_ex * arg
-        r_source(j) = r_source_tr * (1 - arg) + r_source_ex * arg
 
         do n = 1, n_per_dir
             flux(n, j) = exp(-0.5 * ((cp_arg(n) / cp_width(j)) ** 2))
@@ -151,11 +154,47 @@ subroutine init_source(lat_bounds)
 
         total = boundary_flux_tr * (1 - arg) + boundary_flux_ex * arg
         flux(:, j) = 0.5 * flux(:, j) * total / sum(flux(:, j))
+
+        closest = huge(closest)
+        do p = 1, 64
+            dist = abs(lat_in(p) - lat)
+            if (dist < closest) then
+                closest = dist
+                r_source(j) = r_source_in(p)
+            end if
+        end do
     end do
 
 end subroutine init_source
 
-pure subroutine find_lowest_energies(j, n_find, rays, idx)
+subroutine read_source_level_file(lat_in, r_source_in)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real, dimension(64), intent(out) :: lat_in, r_source_in
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: iostat, unit
+
+    ! --------------------------------------------------------------------------
+
+    open(newunit=unit, file="INPUT/source-levels.in", &
+        iostat=iostat, action="read")
+    
+    if (iostat /= 0) then
+        call error_mesg("msgwam_source_mod", &
+            "error loading launch levels", FATAL)
+    end if
+
+    read(unit, *) lat_in
+    read(unit, *) r_source_in
+
+end subroutine
+
+pure subroutine find_weakest_rays(j, n_find, rays, idx)
 
     ! --------------------------------------------------------------------------
     ! arguments
@@ -168,30 +207,42 @@ pure subroutine find_lowest_energies(j, n_find, rays, idx)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    real :: dr, energy, r
     integer :: add_at, n, s
+    real :: criterion, dr, r, wvn
     real, dimension(n_find) :: lowest
 
     ! --------------------------------------------------------------------------
 
     lowest = huge(lowest)
 
+
     do n = 1, n_max
         if (rays(n)%meta == -1) then
             cycle
         end if
 
-        r = 0.5 * (rays(n)%r_lo + rays(n)%r_hi)
-        if ((r < r_source(j)) .and. (rays(n)%m < 0)) then
-            cycle
+        dr = rays(n)%r_hi - rays(n)%r_lo
+        criterion = rays(n)%dens * rays(n)%dm * dr
+
+        if (prune_mode == 1) then
+            ! prune by energy
+            criterion = criterion * rays(n)%omega_hat
+
+        else if (prune_mode == 2) then
+            ! prune by momentum flux
+            wvn = rays(n)%k + rays(n)%l
+            criterion = abs(wvn * criterion * rays(n)%cg_r)
         end if
 
-        dr = rays(n)%r_hi - rays(n)%r_lo
-        energy = rays(n)%dens * rays(n)%dm * rays(n)%omega_hat * dr
+        r = 0.5 * (rays(n)%r_lo + rays(n)%r_hi)
+        if ((r < r_source(j)) .and. (rays(n)%m < 0)) then
+            ! exclude rays below the bottom domain unless all rays are such
+            criterion = (0.5 * huge(criterion)) + criterion
+        end if
 
         add_at = -1
         do s = 1, n_find
-            if (energy < lowest(s)) then
+            if (criterion < lowest(s)) then
                 add_at = s
             else
                 exit
@@ -205,11 +256,11 @@ pure subroutine find_lowest_energies(j, n_find, rays, idx)
         lowest(:add_at - 1) = lowest(2:add_at)
         idx(:add_at - 1) = idx(2:add_at)
 
-        lowest(add_at) = energy
+        lowest(add_at) = criterion
         idx(add_at) = n
     end do
 
-end subroutine find_lowest_energies
+end subroutine find_weakest_rays
 
 subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
     last_meta, n_added, launches)
@@ -228,11 +279,11 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: add_at, dir, n, q_source, s
+    integer :: add_at, counter, dir, n, n_repeats, q_source, s
     real :: a, b, cg_r, cp_hat, dens, dm, G2_source, k, l, m, omega_hat, &
-        N2_source, prob, r, r_ghost, r_hi, r_lo, u_source, v_source, wvn_hor
+        N2_source, r, r_ghost, r_hi, r_lo, rate, u_source, v_source, wvn_hor
 
-    real, dimension(n_source) :: rand
+    real, dimension(MAX_LAUNCHES, n_source) :: rand
     real, dimension(q_max - 1) :: dz_inv
 
     ! --------------------------------------------------------------------------
@@ -262,7 +313,7 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
         do n = 1, n_per_dir
             s = (dir - 1) * n_per_dir + n
 
-            if (.not. (is_stochastic .or. steady_state)) then
+            if (.not. is_stochastic) then
                 if (ghosts(s) > 0) then
                     if (rays(ghosts(s))%r_lo < r_ghost) then
                         cycle
@@ -282,13 +333,12 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
             k = wvn_hor * abs(COS_PHI(dir))
             l = wvn_hor * abs(SIN_PHI(dir))
 
-            if (is_stochastic .or. steady_state) then
-                r_hi = r_source(j)
-            else if (ghosts(s) > 0) then
-                r_hi = rays(ghosts(s))%r_lo
-                r_hi = min(r_hi, r_source(j))
-            else
-                r_hi = r_ghost
+            r_hi = r_ghost
+            if ((.not. is_stochastic)) then
+                if (ghosts(s) > 0) then
+                    r_hi = rays(ghosts(s))%r_lo
+                    r_hi = min(r_hi, r_source(j))
+                end if
             end if
 
             m = get_m(k, l, omega_hat_source ** 2, N2_source, f2(j))
@@ -296,8 +346,11 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
                 f2(j), omega_hat, cg_r)
 
             if (is_stochastic) then
-                prob = epsilon * cg_r * dt / dr_source
-                if (rand(s) .ge. prob) then
+                rate = epsilon * cg_r * dt / dr_source
+                n_repeats = sample_poisson(rand(:, s), rate)
+                counter = 0
+
+                if (n_repeats < 1) then
                     cycle
                 end if
             end if
@@ -335,7 +388,12 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
                 n_added = n_added + 1
                 add_at = add_at + 1
 
-                if (is_stochastic .or. steady_state .or. (r_lo <= r_ghost)) then
+                if (is_stochastic) then
+                    counter = counter + 1
+                    if (counter == n_repeats) then
+                        exit
+                    end if
+                else if (r_lo <= r_ghost) then
                     exit
                 end if
 
@@ -346,6 +404,40 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
     end do
 
 end subroutine get_launches
+
+pure function sample_poisson(rand, rate) result(k)
+
+    ! --------------------------------------------------------------------------
+    ! arguments and result
+    ! --------------------------------------------------------------------------
+    real, dimension(MAX_LAUNCHES), intent(in) :: rand
+    real,                          intent(in) :: rate
+    integer                                   :: k
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------
+    integer :: i
+    real :: L, prod
+
+    ! --------------------------------------------------------------------------
+
+    L = exp(-rate)
+    prod = 1.
+    k = 0
+
+    do i = 1, MAX_LAUNCHES
+        prod = prod * rand(i)
+        k = k + 1
+
+        if (prod < L) then
+            exit
+        end if
+    end do
+
+    k = k - 1
+
+end function sample_poisson
 
 pure subroutine prune(j, norm, n_excess, rays, diag)
 
@@ -373,7 +465,7 @@ pure subroutine prune(j, norm, n_excess, rays, diag)
     diag%total_r = 0.
 
     if (n_excess > 0) then
-        call find_lowest_energies(j, n_excess, rays, idx)
+        call find_weakest_rays(j, n_excess, rays, idx)
 
         if (print_prune_diag) then
             do n = 1, n_excess

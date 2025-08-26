@@ -13,7 +13,7 @@ use fms_mod,              only: CLOCK_ROUTINE, fms_init, mpp_clock_begin, &
 use time_manager_mod,     only: time_manager_init, time_type
 
 use msgwam_constants_mod, only: i_max, init_msgwam_constants, j_max, n_max, &
-                                n_source, print_prune_diag, q_max, steady_state
+                                n_source, print_prune_diag, q_max
 use msgwam_io_mod,        only: init_nc_output, init_ray_state, &
                                 save_ray_state, send_nc_output
 use msgwam_mean_mod,      only: get_accelerations, project_fluxes, &

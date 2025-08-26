@@ -27,7 +27,7 @@ real    :: dr_ghost           = 1000.
 real    :: dr_max             = 10000.
 real    :: dr_min             = 50.
 real    :: dr_source          = 1000.
-real    :: epsilon            = 0.
+real    :: epsilon            = 1.
 real    :: lat_tropics        = 25.
 integer :: max_age            = 10 * 86400
 real    :: max_bv_period      = 2 * 3600
@@ -36,10 +36,8 @@ real    :: mu                 = 1.e-3
 integer :: n_max              = 2500
 integer :: n_source           = 48
 integer :: n_sponge           = 3
-real    :: r_source_ex        = 10000.
-real    :: r_source_tr        = 10000.
-real    :: source_dlat        = 5.
-logical :: steady_state       = .false.
+integer :: prune_mode         = 1
+real    :: source_dlat        = 5.  
 real    :: T_hat_source       = 10. * 3600
 logical :: use_shapiro_filter = .true.
 
@@ -52,8 +50,8 @@ namelist / msgwam_nml / &
     boundary_flux_ex, boundary_flux_tr, break_waves, cp_max, cp_width_ex, &
     cp_width_tr, dr_ghost, dr_max, dr_min, dr_source, epsilon, lat_tropics, &
     max_age, max_bv_period, min_flux, mu, n_max, n_source, n_sponge, &
-    r_source_ex, r_source_tr, source_dlat, steady_state, T_hat_source, &
-    use_shapiro_filter, debug_mode, print_prune_diag, track
+    prune_mode, source_dlat, T_hat_source, use_shapiro_filter, &
+    debug_mode, print_prune_diag, track
 
 private :: max_bv_period, msgwam_nml
 
