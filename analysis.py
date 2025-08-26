@@ -1,335 +1,175 @@
-from typing import Optional
-
 import sys
 
 import cftime
+import matplotlib.gridspec as gs
+import matplotlib.pyplot as plt
 import numpy as np
+import scipy.signal as signal
 import xarray as xr
 
-from matplotlib import gridspec as gs, pyplot as plt
-from matplotlib.colors import SymLogNorm
+_AMAX = 70
+_N_YEARS = 25
+_SCALE = 1.2
 
-_DT = 240
 _CALENDAR = '360_day'
 _UNITS = 'days since 0001-01-01'
 
-def plot_climatology(ds: xr.Dataset, season: Optional[str]=None) -> None:
-    """Plot zonal-mean climatologies in relevant fields."""
+_JET_PRESSURE = 10
+_QBO_PRESSURE = 10
+_TROPICS_LAT = 10
 
-    factors = [1, 1000, 86400] * 2
-    amaxes = [75, 5, 20, 10, 0.5, 20]
-    units = ['m / s', 'mPa', 'm / s / d'] * 2
+def plot_source_levels(_) -> None:
+    """Plot gravity wave sources as a function of latitude."""
 
-    names = []
-    for comp, coord in zip('uv', 'xy'):
-        names.append(_get_uv_name(ds, comp))
-        names.extend([f'gw_flux_{coord}', f'gw_accel_{coord}'])
+    with open('INPUT/source-levels.in') as f:
+        parse_line = lambda line: np.array(list(map(float, line.split())))
+        lats, levels, *_ = map(parse_line, f)
 
-    keep = [k for k, name in enumerate(names) if name in ds]
-    names = list(map(names.__getitem__, keep))
+    x = np.linspace(-90, 90, 180)
+    y = np.interp(x, lats, levels)
 
-    factors = list(map(factors.__getitem__, keep))
-    amaxes = list(map(amaxes.__getitem__, keep))
-    units = list(map(units.__getitem__, keep))
-    
-    n_cols = len(names) // 2
-    widths = [4.5, 0.1] * n_cols
-    fig = plt.figure(constrained_layout=True)
-    spec = gs.GridSpec(2, n_cols * 2, fig, width_ratios=widths)
-    fig.set_size_inches(sum(widths), 2 * 3)
-    axes, caxes = [], []
+    fig, ax = plt.subplots()
+    fig.set_size_inches(4.5, 3)
+    ax.plot(x, y / 1000, color='k')
 
-    for i in range(2):
-        for j in range(n_cols):
-            axes.append(fig.add_subplot(spec[i, 2 * j]))
-            caxes.append(fig.add_subplot(spec[i, 2 * j + 1]))
+    ax.set_xlim(-90, 90)
+    ax.set_xlabel('latitude')
+    ticks = np.linspace(-90, 90, 7)
+    ax.set_xticks(ticks, labels=list(map(_format_lat, ticks)), rotation=30)
 
-    lat = np.linspace(-90, 90, len(ds['lat']))
-    xticks = np.linspace(-90, 90, 7)
-    y = np.log10(ds['pfull'].values)
-    yticks, ylabels = _get_yticks()
+    ax.set_ylim(10, 20)
+    ax.set_ylabel('source level (km)')
 
-    keep = ds['time.year'] > 0
-    if season is not None:
-        keep = keep & (ds['time.season'] == season)
-
-    ds = ds.isel(time=keep).mean(('time', 'lon'))
-    zipped = zip(names, factors, amaxes, units, axes)
-
-    for k, (name, factor, amax, unit, ax) in enumerate(zipped):
-        if name.startswith('gw_accel'):
-            norm = SymLogNorm(1e-3, vmin=-amax, vmax=amax)
-            extras = {'norm' : norm}
-
-        else:
-            extras = {'vmin' : -amax, 'vmax' : amax}
-
-        img = ax.pcolormesh(
-            lat, y, factor * ds[name].values,
-            shading='nearest', cmap='RdBu_r',
-            **extras
-        )
-
-        ax.set_xlim(-90, 90)
-        ax.set_xticks(xticks)
-        ax.set_xlabel('latitude')
-
-        if k % 3 == 0:
-            ax.set_yticks(yticks)
-            ax.set_yticklabels(ylabels)
-            ax.set_ylabel('pressure (hPa)')
-
-        else:
-            ax.set_yticks([])
-            ax.set_yticklabels([])
-
-        ax.invert_yaxis()
-        plt.colorbar(img, cax=caxes[k])
-        ax.set_title(f'{name} ({unit})')
-
-    suffix = season if season else 'annual'
-    plt.savefig(f'plots/climatology-{suffix}.png', dpi=400)
-
-def plot_pruning(ds: xr.Dataset, fname: str) -> None:
-    """Plot pruning as a function of time."""
-
-    n_days = 30
-    dt_resample = 3 * 3600
-    n_steps = (86400 // _DT) * n_days
-
-    ns = np.zeros((32, n_steps))
-    ages = np.zeros((32, n_steps))
-    fluxes = np.zeros((32, n_steps))
-    heights = np.zeros((32, n_steps))
-    j = np.zeros(32).astype(int)
-
-    with open(fname) as f:
-        for line in f:
-            if not 'pruned' in line:
-                continue
-
-            keep = lambda s: s.replace('.', '').isdecimal()
-            parts = list(filter(keep, line.split()))
-            flux, height = map(float, parts[-2:])
-            pe, n, age = map(int, parts[:3])
-
-            ns[pe, j[pe]] = n
-            ages[pe, j[pe]] = age
-            fluxes[pe, j[pe]] = flux
-            heights[pe, j[pe]] = height
-
-            j[pe] = j[pe] + 1
-
-    n_resample = dt_resample // _DT
-    ns = ns.reshape(32, -1, n_resample)
-    ages = ages.reshape(32, -1, n_resample)
-    fluxes = fluxes.reshape(32, -1, n_resample)
-    heights = heights.reshape(32, -1, n_resample)
-
-    ns = ns.sum(axis=(0, 2))
-    ages = ages.sum(axis=(0, 2))
-    fluxes = fluxes.sum(axis=(0, 2))
-
-    heights = heights.sum(axis=(0, 2))
-    per_col = ns / (len(ds['lat']) * len(ds['lon']))
-    idx = ns > 0
-
-    avg_age = np.zeros_like(ages)
-    avg_age[idx] = ages[idx] / ns[idx]
-
-    avg_flux = np.zeros_like(fluxes)
-    avg_flux[idx] = fluxes[idx] / ns[idx]
-
-    avg_height = np.zeros_like(heights)
-    avg_height[idx] = heights[idx] / ns[idx]
-
-    days = np.linspace(0, n_days, len(ns))
-    fig, axes = plt.subplots(nrows=2, ncols=2)
-    fig.set_size_inches(9, 6)
-    axes = axes.flatten()
-
-    axes[0].plot(days, per_col, color='k')
-    axes[1].plot(days, avg_age / 86400, color='k')
-    axes[2].plot(days, 100 * avg_flux, color='k')
-    axes[3].plot(days, avg_height, color='k')
-
-    for ax in axes:
-        ax.set_xlim(days.min(), days.max())
-        ax.set_xlabel('integration day')
-        ax.grid(color='lightgray')
-
-    axes[0].set_ylim(0, 200)
-    axes[1].set_ylim(0, 5)
-    axes[2].set_ylim(0, 5)
-    axes[3].set_ylim(5, 60)
-
-    axes[0].set_ylabel(f'prunes per {dt_resample // 3600} hours')
-    axes[1].set_ylabel('age of pruned rays (days)')
-    axes[2].set_ylabel('flux of pruned rays (%)')
-    axes[3].set_ylabel('height of pruned rays (km)')
+    ax.tick_params('both', direction='in')
+    ax.grid(color='lightgray')
 
     plt.tight_layout()
-    plt.savefig('plots/pruning.png', dpi=400)
+    plt.savefig('plots/source-levels.png', dpi=400)
 
-def plot_qbo(ds: xr.Dataset) -> None:
-    """Plot the QBO wind time series."""
+def plot_summary(ds: xr.Dataset, plot_func: str='pcolormesh') -> None:
+    """Plot zonal wind climatologies and the QBO time series."""
 
-    widths = [4.5, 0.2]
-    fig, (ax, cax) = plt.subplots(ncols=2, width_ratios=widths)
-    fig.set_size_inches(sum(widths), 3)
+    buffer = 0.4
+    heights = [buffer, 2.5 - buffer, 0.68, 2.5 - buffer, buffer]
+    widths = [3, 3, 0.15]
 
-    tropics = abs(ds['lat']) <= 10
-    ds = ds.isel(lat=tropics).mean(('lat', 'lon'))
-    u = ds[_get_uv_name(ds)]
+    fig = plt.figure(constrained_layout=False)
+    fig.set_size_inches(sum(widths), sum(heights))
 
-    years = cftime.date2num(ds['time'].values, _UNITS, calendar=_CALENDAR) / 360
-    y = np.log10(ds['pfull'].values)
-    yticks, ylabels = _get_yticks()
-    
-    img = ax.pcolormesh(
-        years, y, u.values.T,
-        vmin=-50, vmax=50,
-        shading='nearest',
-        cmap='RdBu_r'
+    spec = gs.GridSpec(
+        len(heights), len(widths), fig,
+        height_ratios=heights,
+        width_ratios=widths,
+        hspace=0, wspace=0.25
     )
 
-    signal = u.sel(pfull=10, method='nearest').values
-    crossings = _get_zero_crossings(signal, years * 360) / 360
-    ax.scatter(crossings, np.ones_like(crossings), color='k', marker='x')
-
-    n_years = int(years.max()) + 1
-    ax.set_xticks(np.linspace(0, n_years, n_years + 1))
-    ax.set_xlim(0, n_years)
-    ax.set_xlabel('years')
-
-    ax.set_yticks(yticks)
-    ax.set_yticklabels(ylabels)
-    ax.set_ylabel('pressure (hPa)')
-
-    cbar = plt.colorbar(img, cax=cax)
-    cbar.set_label('m / s')
-
-    ax.invert_yaxis()
-    ax.set_title('tropical-mean $u$')
-
-    plt.tight_layout()
-    plt.savefig('plots/qbo.png', dpi=400)
-
-def plot_summary(ds: xr.Dataset) -> None:
-    """Plot the zonal wind climatologies and QBO time series in one figure."""
-
-    widths = [4.5, 4.5, 4.5, 0.2]
-    fig, axes = plt.subplots(ncols=len(widths), width_ratios=widths)
-    fig.set_size_inches(sum(widths), 3)
-    cax, axes = axes[-1], axes[:-1]
+    axes = [fig.add_subplot(spec[:2, j]) for j in (0, -2)]
+    axes = axes + [fig.add_subplot(spec[3:, :-1])]
+    cax = fig.add_subplot(spec[1:4, -1])
 
     lat = np.linspace(-90, 90, len(ds['lat']))
     y = np.log10(ds['pfull'].values)
-    xticks = np.linspace(-90, 90, 7)
-    yticks, ylabels = _get_yticks()
-    amax = 80
+
+    yticks = np.arange(-1, 4)
+    fmt = lambda v: str(v if v < 1 else int(v))
+    ylabels = list(map(fmt, 10. ** yticks))
+
+    xticks = np.linspace(-90, 90, 5)
+    xlabels = list(map(_format_lat, xticks))
+
+    kwargs = dict(vmin=-_AMAX, vmax=_AMAX, cmap='RdBu_r')
+    if plot_func == 'pcolormesh': kwargs['shading'] = 'nearest'
 
     for ax, season in zip(axes, ['DJF', 'JJA']):
-        keep = (ds['time.year'] > 1) & (ds['time.season'] == season)
-        u = ds[_get_uv_name(ds)].isel(time=keep).mean(('time', 'lon'))
-
-        ax.pcolormesh(
-            lat, y, u.values,
-            vmin=-amax, vmax=amax,
-            shading='nearest',
-            cmap='RdBu_r'
-        )
+        u = _get_season(ds, season)
+        getattr(ax, plot_func)(lat, y, u.values, **kwargs)
 
         ax.set_xlim(-90, 90)
-        ax.set_xticks(xticks)
-        ax.set_xlabel('latitude')
+        ax.set_xticks(xticks, labels=xlabels, rotation=10)
 
-    tropics = abs(ds['lat']) <= 10
-    u = ds[_get_uv_name(ds)].isel(lat=tropics).mean(('lat', 'lon'))
-    years = cftime.date2num(ds['time'].values, _UNITS, calendar=_CALENDAR) / 360
+    u = _get_qbo(ds)
+    years = cftime.date2num(ds['time'], _UNITS, calendar=_CALENDAR) / 360
+    img = getattr(axes[-1], plot_func)(years, y, u.values.T, **kwargs)
 
-    img = axes[-1].pcolormesh(
-        years, y, u.values.T,
-        vmin=-amax, vmax=amax,
-        shading='nearest',
-        cmap='RdBu_r'
-    )
+    crossings = _get_zero_crossings(u) / 360
+    y_c = np.log10(_QBO_PRESSURE) * np.ones_like(crossings)
+    axes[-1].scatter(crossings, y_c, color='k', marker='x', s=(_SCALE * 50))
 
-    n_years = int(years.max()) + 1
-    xticks = np.arange(0, n_years + 1)
-
-    axes[-1].set_xticks(xticks)
-    axes[-1].set_xlim(0, n_years)
     axes[-1].set_xlabel('years')
+    xticks = np.arange(0, _N_YEARS + 1, 5)
+    axes[-1].set_xlim(0, _N_YEARS)
+    axes[-1].set_xticks(xticks)
 
     cbar = plt.colorbar(img, cax=cax)
-    ticks = np.linspace(-amax, amax, 5)
+    cbar.set_ticks(np.linspace(-_AMAX, _AMAX, 5))
     cbar.set_label('m / s')
-    cbar.set_ticks(ticks)
 
     for i, ax in enumerate(axes):
         ax.set_title(f'({chr(i + 97)})')
         ax.set_yticks(yticks)
         ax.invert_yaxis()
 
-        if i == 0:
+        if i != 1:
             ax.set_yticklabels(ylabels)
             ax.set_ylabel('pressure (hPa)')
 
         else:
             ax.set_yticklabels([])
 
-    plt.tight_layout()
-    plt.savefig('plots/summary.png', dpi=400)
+    plt.savefig(f'plots/summary-{plot_func}.png', dpi=400, bbox_inches='tight')
 
 def show_statistics(ds: xr.Dataset) -> None:
-    """Print some statistics about stratospheric variability."""
+    """Print some statistics to do with stratospheric variability."""
 
-    u = ds[_get_uv_name(ds)].sel(pfull=10, method='nearest')
-
-    tropics = abs(ds['lat']) < 10
-    u_qbo = u.isel(lat=tropics).mean(('lat', 'lon')).values
-    days = cftime.date2num(u['time'], _UNITS, calendar=_CALENDAR)
-
-    crossings = _get_zero_crossings(u_qbo, days)
-    print(np.diff(crossings) / 30)
+    crossings = _get_zero_crossings(_get_qbo(ds))
     period = np.diff(crossings).mean() / 30
     print(f'    QBO period is {period:.3f} months')
+    print(np.diff(crossings) / 30)
 
     for season in ['DJF', 'JJA']:
-        keep = (ds['time.season'] == season)
-        keep = keep & (ds['time.year'] > 1)
-        u_s = u.isel(time=keep)
-
+        u = _get_season(ds, season)
         sign = 1 if season == 'DJF' else -1
-        u_s = u_s.sel(lat=(sign * 60), method='nearest')
-        u_s = u_s.mean(('lon', 'time')).item()
+        kwargs = dict(pfull=_JET_PRESSURE, lat=(sign * 60), method='nearest')
+        speed = u.sel(**kwargs).item()
 
         name = 'boreal' if season == 'DJF' else 'austral'
-        print(f'    {name} winter vortex speed is {u_s:.3f} m / s')
+        print(f'    {name} winter vortex speed is {speed:.3f} m / s')
 
-def _get_uv_name(ds: xr.Dataset, comp: str='u') -> str:
-    """Get the zonal component of the wind from a file."""
+def _format_lat(v: float) -> str:
+    """Format a latitude for display."""
 
-    return [s for s in [comp, f'{comp}comp', f'{comp}_gwf'] if s in ds][0]
+    if v == 0:
+        return '0'
 
-def _get_yticks() -> tuple[np.ndarray, np.ndarray]:
-    """Get log pressure coordinate ticks and labels for plots."""
+    suffix = 'N' if v > 0 else 'S'
+    return f'{int(abs(v))}{suffix}'
 
-    ticks = np.arange(-1, 4)
-    labels = [float(f'{x:.2g}') for x in 10. ** ticks]
+def _get_qbo(ds: xr.Dataset) -> xr.DataArray:
+    """Extract the QBO time series from a loaded dataset."""
 
-    return ticks, np.array(labels)
+    tropics = abs(ds['lat']) <= _TROPICS_LAT
+    return ds['u'].isel(lat=tropics).mean(('lat', 'lon'))
 
-def _get_zero_crossings(u: np.ndarray, days: np.ndarray) -> np.ndarray:
-    """Get appropriately smoothed zero crossings from the QBO wind."""
+def _get_season(ds: xr.Dataset, season: str) -> xr.DataArray:
+    """Get the zonal wind climatology for a given season."""
 
-    u_hat = np.fft.rfft(u)
-    freqs = np.fft.rfftfreq(len(u), days[1] - days[0])
-    u_hat[freqs > 1 / 240] = 0
+    spunup = ds['time.year'] > 1
+    keep = (ds['time.season'] == season) & spunup
     
-    u = np.fft.irfft(u_hat, n=len(u))
-    return days[:-1][(u[:-1] > 0) & (u[1:] < 0)]
+    return ds['u'].isel(time=keep).mean(('time', 'lon'))
+
+def _get_zero_crossings(u: xr.DataArray) -> np.ndarray:
+    """Smooth and extract zero crossings from the QBO wind."""
+
+    days = cftime.date2num(u['time'], _UNITS, calendar=_CALENDAR)
+    data = u.sel(pfull=_QBO_PRESSURE, method='nearest').values
+
+    fs = 1 / (days[1] - days[0])
+    sos = signal.butter(9, 1 / 120, output='sos', fs=fs)
+    data = signal.sosfilt(sos, data)
+
+    idx = (data[:-1] > 0) & (data[1:] < 0)
+    return days[:-1][idx]
 
 def _open_dataset(fname: str) -> xr.Dataset:
     """Open a MiMA output file and parse the time dimension correctly."""
@@ -341,20 +181,11 @@ def _open_dataset(fname: str) -> xr.Dataset:
 
     return ds
 
-def _weighted_mean(a: np.ndarray, w: np.ndarray, axis: int) -> np.ndarray:
-    """Take a weighted mean along a given axis."""
-
-    w_sum = w.sum(axis=axis)
-
-    return np.divide(
-        (a * w).sum(axis=axis), w_sum,
-        out=np.zeros_like(w_sum),
-        where=(w_sum > 0)
-    )
-
 if __name__ == '__main__':
     fname, *tasks = sys.argv[1:]
-    with _open_dataset(fname) as ds:
-        for task in tasks:
-            func_name, *args = task.split(':')
-            globals()[func_name.replace('-', '_')](ds, *args)
+    ds = _open_dataset(fname)
+
+    for task in tasks:
+        func_name, *args = task.split(':')
+        func_name = func_name.replace('-', '_')
+        globals()[func_name](ds, *args)
