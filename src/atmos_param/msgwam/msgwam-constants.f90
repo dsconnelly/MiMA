@@ -28,6 +28,7 @@ real    :: dr_max             = 10000.
 real    :: dr_min             = 50.
 real    :: dr_source          = 1000.
 real    :: epsilon            = 1.
+logical :: equal_flux         = .false.
 real    :: lat_tropics        = 25.
 integer :: max_age            = 10 * 86400
 real    :: max_bv_period      = 2 * 3600
@@ -48,9 +49,9 @@ integer, dimension(5) :: track            = (/ 0, 1, 1, 1, 1 /)
 
 namelist / msgwam_nml / &
     boundary_flux_ex, boundary_flux_tr, break_waves, cp_max, cp_width_ex, &
-    cp_width_tr, dr_ghost, dr_max, dr_min, dr_source, epsilon, lat_tropics, &
-    max_age, max_bv_period, min_flux, mu, n_max, n_source, n_sponge, &
-    prune_mode, source_dlat, T_hat_source, use_shapiro_filter, &
+    cp_width_tr, dr_ghost, dr_max, dr_min, dr_source, epsilon, equal_flux, &
+    lat_tropics, max_age, max_bv_period, min_flux, mu, n_max, n_source, &
+    n_sponge, prune_mode, source_dlat, T_hat_source, use_shapiro_filter, &
     debug_mode, print_prune_diag, track
 
 private :: max_bv_period, msgwam_nml

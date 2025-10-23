@@ -10,9 +10,9 @@ use fms_mod,              only: error_mesg, FATAL, mpp_pe
 
 use msgwam_constants_mod, only: boundary_flux_ex, boundary_flux_tr, cp_max, &
                                 cp_width_ex, cp_width_tr, dr_ghost, dr_source, &
-                                epsilon, f2, i_max, j_max, lat_tropics, n_max, &
-                                n_source, print_prune_diag, prune_mode, q_max, &
-                                source_dlat, T_hat_source
+                                epsilon, equal_flux, f2, i_max, j_max, &
+                                lat_tropics, n_max, n_source, print_prune_diag, &
+                                prune_mode, q_max, source_dlat, T_hat_source
 use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
@@ -24,11 +24,11 @@ public LONG_KIND, check_source, init_source, r_source, &
 
 logical :: is_stochastic
 integer :: n_launches, n_per_dir
-real :: dc_source, omega_hat_source
+real :: omega_hat_source
 
+real, dimension(:), allocatable :: r_source
+real, dimension(:, :), allocatable :: cp_arg, dc_source, flux
 logical, dimension(:), allocatable :: is_extrinsic
-real, dimension(:), allocatable :: cp_arg, cp_width, r_source
-real, dimension(:, :), allocatable :: flux
 
 real, dimension(4) :: COS_PHI = (/ 1., 0., -1., 0. /)
 real, dimension(4) :: SIN_PHI = (/ 0., 1., 0., -1. /)
@@ -116,28 +116,23 @@ subroutine init_source(lat_bounds)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: j, n, p
-    real :: arg, closest, dist, lat, total
+    real :: arg, closest, cp_width, dist, lat, total
     real, dimension(64) :: lat_in, r_source_in
 
     ! --------------------------------------------------------------------------
 
     n_per_dir = n_source / 4
-    dc_source = cp_max / n_per_dir
     omega_hat_source = 2 * PI / T_hat_source
     is_stochastic = epsilon < 1.
 
-    allocate(cp_arg(n_per_dir))
     allocate(is_extrinsic(j_max))
-    allocate(flux(n_per_dir, j_max))
-    allocate(cp_width(j_max))
     allocate(r_source(j_max))
 
+    allocate(cp_arg(n_per_dir, j_max))
+    allocate(dc_source(n_per_dir, j_max))
+    allocate(flux(n_per_dir, j_max))
+
     n_launches = n_source * max(1, int(dr_ghost / dr_source) + 1)
-
-    do n = 1, n_per_dir
-        cp_arg(n) = (n - 0.5) * dc_source
-    end do
-
     call read_source_level_file(lat_in, r_source_in)
 
     do j = 1, j_max
@@ -146,14 +141,11 @@ subroutine init_source(lat_bounds)
         arg = min(max(arg, 0.), 1.) 
 
         is_extrinsic(j) = abs(lat) > lat_tropics
-        cp_width(j) = cp_width_tr * (1 - arg) + cp_width_ex * arg
-
-        do n = 1, n_per_dir
-            flux(n, j) = exp(-0.5 * ((cp_arg(n) / cp_width(j)) ** 2))
-        end do
-
+        cp_width = cp_width_tr * (1 - arg) + cp_width_ex * arg
         total = boundary_flux_tr * (1 - arg) + boundary_flux_ex * arg
-        flux(:, j) = 0.5 * flux(:, j) * total / sum(flux(:, j))
+
+        call get_cp_and_flux(cp_width, 0.5 * total, &
+            cp_arg(:, j), dc_source(:, j), flux(:, j))
 
         closest = huge(closest)
         do p = 1, 64
@@ -166,6 +158,74 @@ subroutine init_source(lat_bounds)
     end do
 
 end subroutine init_source
+
+subroutine get_cp_and_flux(cp_width, total, cp_arg, dc_source, flux)
+
+    ! --------------------------------------------------------------------------
+    ! arguments
+    ! --------------------------------------------------------------------------
+    real,                       intent(in)  :: cp_width, total
+    real, dimension(n_per_dir), intent(out) :: cp_arg, dc_source, flux
+
+    ! --------------------------------------------------------------------------
+    ! local variables
+    ! --------------------------------------------------------------------------    
+    integer :: b, n
+    real :: accum, dc, flux_per
+    real, dimension(n_per_dir + 1) :: edges
+    real, dimension(1000001) :: grid, flux_fine
+
+    ! --------------------------------------------------------------------------
+
+    if (.not. equal_flux) then
+        dc = cp_max / n_per_dir
+        dc_source = dc
+
+        do n = 1, n_per_dir
+            cp_arg(n) = (n - 0.5) * dc
+            flux(n) = exp(-0.5 * ((cp_arg(n) / cp_width) ** 2))
+        end do
+
+    else
+        dc = cp_max / (size(grid) - 1)
+        flux = 1.
+
+        do n = 1, size(grid)
+            grid(n) = (n - 1) * dc
+            flux_fine(n) = exp(-0.5 * ((grid(n) / cp_width) ** 2))
+        end do
+
+        flux_per = sum(flux_fine) / n_per_dir
+        accum = 0.
+        
+        edges(1) = 0.
+        b = 2
+
+        do n = 1, size(grid)
+            accum = accum + flux_fine(n)
+
+            if (accum >= flux_per) then
+                edges(b) = grid(n)
+                accum = 0.
+                b = b + 1
+            end if
+
+            if (b > n_per_dir + 1) then
+                exit
+            end if
+        end do
+
+        if (b <= n_per_dir + 1) then
+            edges(b:) = cp_max
+        end if
+
+        dc_source = edges(2:) - edges(:n_per_dir)
+        cp_arg = (edges(:n_per_dir) + edges(2:)) / 2.
+    end if
+
+    flux = flux * total / sum(flux)
+
+end subroutine get_cp_and_flux
 
 subroutine read_source_level_file(lat_in, r_source_in)
 
@@ -208,30 +268,69 @@ pure subroutine find_weakest_rays(j, n_find, rays, idx)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: add_at, n, s
-    real :: criterion, dr, r, wvn
+    real :: action, criterion, dr, r, wvn
     real, dimension(n_find) :: lowest
+
+    integer, dimension(n_max) :: wdx
+    real, dimension(n_max) :: precalc
+    real, dimension(4, q_max) :: norms
 
     ! --------------------------------------------------------------------------
 
     lowest = huge(lowest)
+    precalc = 0.
+    norms = 0.
+    wdx = 0
 
+    if (prune_mode > 1) then
+        do n = 1, n_max
+            if (rays(n)%meta == -1) then
+                cycle
+            end if
+
+            wvn = rays(n)%k + rays(n)%l
+            dr = rays(n)%r_hi - rays(n)%r_lo
+            action = rays(n)%dens * rays(n)%dm
+            precalc(n) = abs(wvn * action * rays(n)%cg_r * dr)
+
+            if (prune_mode == 3) then
+
+                if (rays(n)%k > 0) then
+                    wdx(n) = 1
+                else if (rays(n)%k < 0) then
+                    wdx(n) = 2
+                else if (rays(n)%l > 0) then
+                    wdx(n) = 3
+                else
+                    wdx(n) = 4
+                end if
+
+                norms(wdx(n), rays(n)%q_mid) = norms(wdx(n), rays(n)%q_mid) &
+                    + precalc(n)
+
+            end if
+        end do    
+    end if
 
     do n = 1, n_max
         if (rays(n)%meta == -1) then
             cycle
         end if
 
-        dr = rays(n)%r_hi - rays(n)%r_lo
-        criterion = rays(n)%dens * rays(n)%dm * dr
-
         if (prune_mode == 1) then
             ! prune by energy
+            dr = rays(n)%r_hi - rays(n)%r_lo
+            criterion = rays(n)%dens * rays(n)%dm * dr
             criterion = criterion * rays(n)%omega_hat
 
         else if (prune_mode == 2) then
             ! prune by momentum flux
-            wvn = rays(n)%k + rays(n)%l
-            criterion = abs(wvn * criterion * rays(n)%cg_r)
+            criterion = precalc(n)
+
+        else if (prune_mode == 3) then
+            ! prune by "importance"
+            criterion = precalc(n) / norms(wdx(n), rays(n)%q_mid)
+
         end if
 
         r = 0.5 * (rays(n)%r_lo + rays(n)%r_hi)
@@ -321,7 +420,7 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
                 end if
             end if
 
-            cp_hat = cp_arg(n) * (COS_PHI(dir) + SIN_PHI(dir))
+            cp_hat = cp_arg(n, j) * (COS_PHI(dir) + SIN_PHI(dir))
             if (is_extrinsic(j)) then
                 cp_hat = cp_hat &
                     - u_source * abs(COS_PHI(dir)) &
@@ -355,7 +454,7 @@ subroutine get_launches(j, z, u, v, N2, G2, dt, rays, ghosts, &
                 end if
             end if
 
-            dm = get_dm(m, dc_source, N2_source)
+            dm = get_dm(m, dc_source(n, j), N2_source)
             dens = flux(n, j) / abs(wvn_hor * dm * cg_r)
 
             do
