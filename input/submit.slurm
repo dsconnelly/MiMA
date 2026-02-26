@@ -1,10 +1,10 @@
 #!/bin/bash -e
 
-#SBATCH --nodes=8
-#SBATCH --ntasks-per-node=4
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=16
 #SBATCH --cpus-per-task=1
 #SBATCH --time=6:00:00
-#SBATCH --mem=64G
+#SBATCH --mem=48G
 #SBATCH --job-name=RUN_NAME
 #SBATCH --out=RUN_DIR/slurm.out
 #SBATCH --mail-user=USER@nyu.edu
@@ -22,7 +22,7 @@ ccomb=MIMA_DIR/bin/mppnccombine
 N_YEARS="05"
 
 for yy in {01..$N_YEARS}; do
-    mpirun -np $SLURM_N_TASKS ./mima.x
+    mpirun -np $SLURM_NTASKS ./mima.x
 
     for fname in *.nc.0000; do
         head=${fname%.0000}

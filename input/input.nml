@@ -45,7 +45,7 @@
 
  &rrtm_radiation_nml
      h2o_lower_limit        = 2.e-07,
-     co2ppmv                = 390.,
+     co2ppmv                = 400.,
      do_read_ozone          = .true.,
      ozone_file             = 'ozone_1990',
      dt_rad_avg             =  4500,
@@ -99,7 +99,7 @@
      trayfric      = -0.5,
      sponge_pbottom=  50.,
      do_conserve_energy = .true.,
-     cg_drag_scheme = 2,
+     cg_drag_scheme = 1,
      do_mg_drag = .false./
 
 &topography_nml
