@@ -16,7 +16,12 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 source MIMA_DIR/scripts/modules.sh
 ccomb=MIMA_DIR/bin/mppnccombine
 
-for yy in {01..05}; do
+# This variable sets the number of years to integrate for.
+# Be sure to keep it as two digits - that is, you need to pad
+# it with a zero if you integrate for fewer than ten years.
+N_YEARS="05"
+
+for yy in {01..$N_YEARS}; do
     mpirun -np $SLURM_N_TASKS ./mima.x
 
     for fname in *.nc.0000; do
