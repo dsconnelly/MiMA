@@ -3,8 +3,8 @@ cmake_minimum_required(VERSION 3.2)
 cmake_policy (SET CMP0076 NEW)
 
 # MiMA claims to only compile with ifort / icc currently.
-set ( CMAKE_Fortran_COMPILER "ifort" )
-set ( CMAKE_C_COMPILER "icc" )
+set ( CMAKE_Fortran_COMPILER "ifx" )
+set ( CMAKE_C_COMPILER "icx" )
 project(MiMA Fortran C)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -32,9 +32,6 @@ endif()
 # Find MPI, OpenMP, and python libraries and link
 find_package (MPI REQUIRED)
 target_link_libraries( mima.x PRIVATE MPI::MPI_Fortran )
-
-find_package (Python REQUIRED COMPONENTS Development)
-target_link_libraries( mima.x PRIVATE Python::Python )
 
 find_package (OpenMP REQUIRED COMPONENTS Fortran)
 target_link_libraries( mima.x PRIVATE OpenMP::OpenMP_Fortran )
@@ -80,18 +77,37 @@ src/atmos_param/rrtm_radiation/rrtmg_lw/gcm_model/src/rrtmg_lw_k_g.f90
 PROPERTIES
 COMPILE_FLAGS -O0
 )
+set_source_files_properties (
+src/atmos_param/msgwam/msgwam-constants.f90
+src/atmos_param/msgwam/msgwam-interface.f90
+src/atmos_param/msgwam/msgwam-io.f90
+src/atmos_param/msgwam/msgwam-mean.f90
+src/atmos_param/msgwam/msgwam-rays.f90
+src/atmos_param/msgwam/msgwam-rk4.f90
+src/atmos_param/msgwam/msgwam-sinks.f90
+src/atmos_param/msgwam/msgwam-source.f90
+src/atmos_param/msgwam/msgwam-utils.f90
+PROPERTIES
+COMPILE_FLAGS -ipo
+)
 add_subdirectory( src/atmos_shared )
 add_subdirectory( src/atmos_spectral )
 add_subdirectory( src/ice_param )
 # include/fms_platform.h
 add_subdirectory( src/shared )
 
-# Set coompile options for executable
+# Set compile options for executable
+target_link_options( mima.x PRIVATE "-ipo" )
 target_compile_options( mima.x PRIVATE
 -fpp
 -safe-cray-ptr
 -ftz
 -assume byterecl
+-xHost
+-stack-temps
+-qopenmp
 -i4
 -r8
+-fpic
+-unroll
 )

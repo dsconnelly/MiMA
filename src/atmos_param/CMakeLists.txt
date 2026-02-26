@@ -6,7 +6,16 @@ moist_conv/moist_conv.f90
 moist_processes/moist_processes.f90
 damping_driver/damping_driver.f90
 cloud_rad/cloud_rad.f90
-cg_drag/cg_drag.f90
+cg_drag/ad99.f90
+msgwam/msgwam-constants.f90
+msgwam/msgwam-interface.f90
+msgwam/msgwam-io.f90
+msgwam/msgwam-mean.f90
+msgwam/msgwam-rays.f90
+msgwam/msgwam-rk4.f90
+msgwam/msgwam-sinks.f90
+msgwam/msgwam-source.f90
+msgwam/msgwam-utils.f90
 ras/ras.f90
 diag_integral/diag_integral.f90
 edt/edt.f90

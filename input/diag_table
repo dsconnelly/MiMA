@@ -12,11 +12,6 @@
  "dynamics",        "vcomp",      "vcomp",          "atmos_4xdaily",    "all", .false., "none", 2,
  "dynamics",        "temp",       "temp",           "atmos_4xdaily",    "all", .false., "none", 2,
  "dynamics",        "sphum",      "sphum",          "atmos_4xdaily",    "all", .false., "none", 2,
-# gravity wave variables
- "msgwam",         "gw_flux_x",  "gw_flux_x",      "atmos_4xdaily",    "all", .false., "none", 2,
- "msgwam",         "gw_flux_y",  "gw_flux_y",      "atmos_4xdaily",    "all", .false., "none", 2,
- "msgwam",         "gw_accel_x", "gw_accel_x",     "atmos_4xdaily",    "all", .false., "none", 2,
- "msgwam",         "gw_accel_y", "gw_accel_y",     "atmos_4xdaily",    "all", .false., "none", 2,
 # moisture variables
   "moist",          "precip",     "precip",         "atmos_4xdaily",    "all", .false., "none", 2,
 #=============================================================================================
