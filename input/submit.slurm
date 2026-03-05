@@ -14,7 +14,7 @@ cd RUN_DIR
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 source MIMA_DIR/scripts/modules.sh
-ccomb=MIMA_DIR/bin/mppnccombine
+ccomb=MIMA_DIR/build/mppnccombine
 
 # This variable sets the number of years to integrate for.
 # Be sure to keep it as two digits - that is, you need to pad
