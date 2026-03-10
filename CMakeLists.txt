@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.2)
 #policy CMP0076 - target_sources source files are relative to file where target_sources is run
 cmake_policy (SET CMP0076 NEW)
 
+# this policy allows IPO
+cmake_policy(SET CMP0069 NEW)
+
 # MiMA claims to only compile with ifort / icc currently.
 set ( CMAKE_Fortran_COMPILER "ifx" )
 set ( CMAKE_C_COMPILER "icx" )
@@ -54,6 +57,14 @@ if (NETCDF_C_FOUND)
     list(APPEND NETCDF_INCLUDES "${NETCDF_C_INCLUDE_DIRS}")
 endif()
 
+include(CheckIPOSupported)
+check_ipo_supported(RESULT ipo_supported)
+if(ipo_supported)
+    set_property(TARGET mima.x PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+else()
+    message(FATAL_ERROR "IPO not supported")
+endif()
+
 target_link_libraries( mima.x PRIVATE mima_c ${NETCDF_LIBRARIES} )
 target_include_directories( mima.x PRIVATE ${NETCDF_INCLUDES} )
 target_link_libraries( mppnccombine PRIVATE ${NETCDF_LIBRARIES} )
@@ -77,19 +88,6 @@ src/atmos_param/rrtm_radiation/rrtmg_lw/gcm_model/src/rrtmg_lw_k_g.f90
 PROPERTIES
 COMPILE_FLAGS -O0
 )
-set_source_files_properties (
-src/atmos_param/msgwam/msgwam-constants.f90
-src/atmos_param/msgwam/msgwam-interface.f90
-src/atmos_param/msgwam/msgwam-io.f90
-src/atmos_param/msgwam/msgwam-mean.f90
-src/atmos_param/msgwam/msgwam-rays.f90
-src/atmos_param/msgwam/msgwam-rk4.f90
-src/atmos_param/msgwam/msgwam-sinks.f90
-src/atmos_param/msgwam/msgwam-source.f90
-src/atmos_param/msgwam/msgwam-utils.f90
-PROPERTIES
-COMPILE_FLAGS -ipo
-)
 add_subdirectory( src/atmos_shared )
 add_subdirectory( src/atmos_spectral )
 add_subdirectory( src/ice_param )
@@ -97,15 +95,12 @@ add_subdirectory( src/ice_param )
 add_subdirectory( src/shared )
 
 # Set compile options for executable
-target_link_options( mima.x PRIVATE "-ipo" )
 target_compile_options( mima.x PRIVATE
 -fpp
 -safe-cray-ptr
 -ftz
 -assume byterecl
 -xHost
--stack-temps
--qopenmp
 -i4
 -r8
 -fpic

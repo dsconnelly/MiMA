@@ -1,10 +1,10 @@
 #!/bin/bash -e
 
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=16
-#SBATCH --cpus-per-task=1
-#SBATCH --time=6:00:00
-#SBATCH --mem=48G
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=3
+#SBATCH --time=24:00:00
+#SBATCH --mem=64G
 #SBATCH --job-name=RUN_NAME
 #SBATCH --out=RUN_DIR/slurm.out
 #SBATCH --mail-user=USER@nyu.edu
@@ -19,14 +19,17 @@ ccomb=MIMA_DIR/build/mppnccombine
 # This variable sets the number of years to integrate for.
 # Be sure to keep it as two digits - that is, you need to pad
 # it with a zero if you integrate for fewer than ten years.
-N_YEARS="05"
+N_YEARS="25"
 
 for yy in {01..$N_YEARS}; do
-    mpirun -np $SLURM_NTASKS ./mima.x
+    mpirun --bind-to none \
+        -np $SLURM_NTASKS \
+	env OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK \
+	./mima.x
 
     for fname in *.nc.0000; do
         head=${fname%.0000}
-        mpirun -np 1 $ccomb -r $head $head.*
+        $ccomb -r $head $head.*
     done
 
     mkdir -p ${yy}

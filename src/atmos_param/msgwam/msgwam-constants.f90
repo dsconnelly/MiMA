@@ -76,8 +76,8 @@ subroutine init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
-    integer :: i_err, io, j, log_unit, nml_unit
-    real :: ROT_EARTH, lat
+    integer :: a, i_err, io, j, log_unit, nml_unit
+    real :: ROT_EARTH, b, lat
 
     ! --------------------------------------------------------------------------
 
@@ -111,11 +111,12 @@ subroutine init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
         f2(j) = (2 * ROT_EARTH * sin(lat)) ** 2
     end do
 
-    if (epsilon > 0) then
-        stoch_factor = 1. / epsilon
-    else
-        stoch_factor = 1.
-    end if
+    stoch_factor = 1. / epsilon
+    a = nint(sqrt(stoch_factor))
+    b = stoch_factor / a
+
+    n_source = n_source * a
+    dr_source = dr_source / b
 
 end subroutine init_msgwam_constants
 
