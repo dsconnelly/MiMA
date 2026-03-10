@@ -17,32 +17,31 @@ public apply_breaking, apply_dissipation, check_boundaries
 
 contains
 
-pure subroutine apply_breaking(j, z_faces, rho, rays)
+pure subroutine apply_breaking(j, z_faces, rho, N2, rays)
 
     ! --------------------------------------------------------------------------
     ! arguments
     ! --------------------------------------------------------------------------
     integer,                       intent(in)    :: j
     real, dimension(q_max + 1),    intent(in)    :: z_faces
-    real, dimension(q_max),        intent(in)    :: rho
+    real, dimension(q_max),        intent(in)    :: rho, N2
     type(t_ray), dimension(n_max), intent(inout) :: rays
 
     ! --------------------------------------------------------------------------
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: n, q, q_hi, q_lo
-    real :: D, dz, frac, max_kappa, r, wvn_hor_sq, wvn_ver_sq, z_hi, z_lo
-    
-    real, dimension(q_max) :: num, den, kappa
-    real, dimension(n_max) :: wvn_sq
+    real :: dz, frac, min_s, power, r, z_hi, z_lo
 
+    real, dimension(q_max) :: num, den, s
+    
     ! --------------------------------------------------------------------------
 
     if (.not. break_waves) then
         return
     end if
 
-    num = -0.5 * rho
+    num = 0.5 * rho * N2
     den = 0.
 
     do n = 1, n_max
@@ -50,12 +49,8 @@ pure subroutine apply_breaking(j, z_faces, rho, rays)
             cycle
         end if
 
-        wvn_hor_sq = rays(n)%k ** 2 + rays(n)%l ** 2
-        wvn_ver_sq = rays(n)%m ** 2 + rays(n)%G2
-        wvn_sq(n) = wvn_hor_sq + wvn_ver_sq
-
-        D = rays(n)%dens * rays(n)%dm * wvn_hor_sq * wvn_ver_sq / &
-            (epsilon * rays(n)%omega_hat)
+        power = rays(n)%dens * rays(n)%dm * (rays(n)%m ** 2) \
+            * rays(n)%omega_hat / epsilon
 
         q_hi = max(1, rays(n)%q_hi - 1)
         q_lo = min(q_max, rays(n)%q_lo + 1)
@@ -72,12 +67,11 @@ pure subroutine apply_breaking(j, z_faces, rho, rays)
             end if
 
             frac = (min(rays(n)%r_hi, z_hi) - max(rays(n)%r_lo, z_lo)) / dz
-            num(q) = num(q) + frac * D / wvn_sq(n)
-            den(q) = den(q) + frac * D
+            den(q) = den(q) + frac * power
         end do
     end do
 
-    kappa = merge(num / den, 0., den /= 0.)
+    s = merge(num / den, 1., den /= 0.)
 
     do n = 1, n_max
         if (rays(n)%meta == -1) then
@@ -89,7 +83,7 @@ pure subroutine apply_breaking(j, z_faces, rho, rays)
             cycle
         end if
 
-        max_kappa = 0.
+        min_s = 1.
         q_hi = max(1, rays(n)%q_hi - 1)
         q_lo = min(q_max, rays(n)%q_lo + 1)
 
@@ -103,13 +97,12 @@ pure subroutine apply_breaking(j, z_faces, rho, rays)
                 exit
             end if
 
-            if (kappa(q) > max_kappa) then
-                max_kappa = kappa(q)
+            if (s(q) < min_s) then
+                min_s = s(q)
             end if
         end do
 
-        max_kappa = epsilon * max_kappa
-        rays(n)%dens = rays(n)%dens * max(0., 1 - wvn_sq(n) * max_kappa)
+        rays(n)%dens = rays(n)%dens * min_s
     end do
 
 end subroutine apply_breaking

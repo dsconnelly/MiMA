@@ -223,7 +223,7 @@ subroutine advance_column(j, dt, z_full, p_full, temp, uuu, vvv, &
     call take_RK4_step(j, z_centers(1:q_max), u, v, N2, G2, dt, rays)
 
     call apply_dissipation(j, z_faces, z_centers(1:q_max), rho, dt, rays)
-    call apply_breaking(j, z_faces, rho, rays)
+    call apply_breaking(j, z_faces, rho, N2, rays)
     call check_boundaries(j, z_centers, rays)
 
     call check_source(j, z_centers(1:q_max), u, v, N2, G2, dt, &
