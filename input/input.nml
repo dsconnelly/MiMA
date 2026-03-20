@@ -99,7 +99,7 @@
      trayfric      = -0.5,
      sponge_pbottom=  50.,
      do_conserve_energy = .true.,
-     cg_drag_scheme = 1,
+     cg_drag_scheme = 2,
      do_mg_drag = .false./
 
 &topography_nml
@@ -107,18 +107,22 @@
 	water_file = 'INPUT/navy_pctwater.data.nc' /
 
  &msgwam_nml
-    boundary_flux_ex   = 0.004,
-    boundary_flux_tr   = 0.004,
-    cp_width_tr        = 20.,
-    cp_width_ex        = 20.,
-    dr_ghost           = 3000.
-    dr_source          = 2000.,
+    boundary_flux_ex   = 0.008,
+    boundary_flux_tr   = 0.003,
+    cp_width_tr        = 35.,
+    cp_width_ex        = 35.,
+    dr_ghost           = 2000.,
+    dr_source          = 2500.,
+    epsilon            = 1.,
+    equal_flux         = .true.,
+    is_stochastic      = .false.,
     lat_tropics        = 25.,
-    n_max              = 400,
+    n_max              = 250,
     n_source           = 16,
     n_sponge           = 2,
     source_dlat        = 5.,
-    print_prune_diag   = .false. / 
+    prune_mode         = 2,
+    print_prune_diag   = .false. /
 
  &ad99_nml
      Bt_0  = 0.0043,  

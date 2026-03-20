@@ -31,9 +31,10 @@ pure subroutine apply_breaking(j, z_faces, rho, N2, rays)
     ! local variables
     ! --------------------------------------------------------------------------
     integer :: n, q, q_hi, q_lo
-    real :: dz, frac, min_s, power, r, z_hi, z_lo
+    real :: dz, frac, max_kappa, p, r, s, wvn_ver_sq, z_hi, z_lo
 
-    real, dimension(q_max) :: num, den, s
+    real, dimension(q_max) :: num, den, kappa
+    real, dimension(n_max) :: wvn_sq
     
     ! --------------------------------------------------------------------------
 
@@ -41,7 +42,8 @@ pure subroutine apply_breaking(j, z_faces, rho, N2, rays)
         return
     end if
 
-    num = 0.5 * rho * N2
+    wvn_sq = 0.
+    num = -epsilon * rho * N2
     den = 0.
 
     do n = 1, n_max
@@ -49,8 +51,9 @@ pure subroutine apply_breaking(j, z_faces, rho, N2, rays)
             cycle
         end if
 
-        power = rays(n)%dens * rays(n)%dm * (rays(n)%m ** 2) \
-            * rays(n)%omega_hat / epsilon
+        wvn_ver_sq = rays(n)%m ** 2
+        wvn_sq(n) = rays(n)%k ** 2 + rays(n)%l ** 2 + wvn_ver_sq
+        p = 2 * rays(n)%dens * rays(n)%dm * rays(n)%omega_hat * wvn_ver_sq
 
         q_hi = max(1, rays(n)%q_hi - 1)
         q_lo = min(q_max, rays(n)%q_lo + 1)
@@ -67,11 +70,12 @@ pure subroutine apply_breaking(j, z_faces, rho, N2, rays)
             end if
 
             frac = (min(rays(n)%r_hi, z_hi) - max(rays(n)%r_lo, z_lo)) / dz
-            den(q) = den(q) + frac * power
+            num(q) = num(q) + frac * p
+            den(q) = den(q) + frac * p * wvn_sq(n)
         end do
     end do
 
-    s = merge(num / den, 1., den /= 0.)
+    kappa = merge(num / den, 0., den /= 0.)
 
     do n = 1, n_max
         if (rays(n)%meta == -1) then
@@ -83,7 +87,7 @@ pure subroutine apply_breaking(j, z_faces, rho, N2, rays)
             cycle
         end if
 
-        min_s = 1.
+        max_kappa = 0.
         q_hi = max(1, rays(n)%q_hi - 1)
         q_lo = min(q_max, rays(n)%q_lo + 1)
 
@@ -97,12 +101,13 @@ pure subroutine apply_breaking(j, z_faces, rho, N2, rays)
                 exit
             end if
 
-            if (s(q) < min_s) then
-                min_s = s(q)
+            if (kappa(q) > max_kappa) then
+                max_kappa = kappa(q) 
             end if
         end do
 
-        rays(n)%dens = rays(n)%dens * min_s
+        s = max(0., 1 - max_kappa * wvn_sq(n))
+        rays(n)%dens = rays(n)%dens * s
     end do
 
 end subroutine apply_breaking

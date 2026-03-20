@@ -29,6 +29,7 @@ real    :: dr_min             = 50.
 real    :: dr_source          = 1000.
 real    :: epsilon            = 1.
 logical :: equal_flux         = .false.
+logical :: is_stochastic      = .false.
 real    :: lat_tropics        = 25.
 integer :: max_age            = 10 * 86400
 real    :: max_bv_period      = 2 * 3600
@@ -52,7 +53,7 @@ namelist / msgwam_nml / &
     cp_width_tr, dr_ghost, dr_max, dr_min, dr_source, epsilon, equal_flux, &
     lat_tropics, max_age, max_bv_period, min_flux, mu, n_max, n_source, &
     n_sponge, prune_mode, source_dlat, T_hat_source, use_shapiro_filter, &
-    debug_mode, print_prune_diag, track
+    debug_mode, print_prune_diag, track, is_stochastic
 
 private :: max_bv_period, msgwam_nml
 
@@ -110,6 +111,10 @@ subroutine init_msgwam_constants(lon_bounds, lat_bounds, p_ref)
         lat = 0.5 * (lat_bounds(j) + lat_bounds(j + 1))
         f2(j) = (2 * ROT_EARTH * sin(lat)) ** 2
     end do
+
+    if (.not. is_stochastic) then
+        epsilon = 1.
+    end if
 
     stoch_factor = 1. / epsilon
     a = nint(sqrt(stoch_factor))

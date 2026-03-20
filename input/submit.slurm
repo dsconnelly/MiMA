@@ -21,7 +21,7 @@ ccomb=MIMA_DIR/build/mppnccombine
 # it with a zero if you integrate for fewer than ten years.
 N_YEARS="25"
 
-for yy in {01..$N_YEARS}; do
+for yy in $(seq -f "%02g" 1 $N_YEARS); do
     mpirun --bind-to none \
         -np $SLURM_NTASKS \
 	env OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK \
@@ -39,3 +39,5 @@ for yy in {01..$N_YEARS}; do
     mv RESTART/* INPUT
 done
 
+module load cdo/2.5.0
+cdo -zonmean -timselmean,28, -selname,u -mergetime ??/atmos_out.nc qbo-weekly.nc

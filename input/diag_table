@@ -1,19 +1,23 @@
 "MiMA"
 0001 1 1 0 0 0
 #output files
-"atmos_4xdaily",    6, "hours", 1, "days", "time",
+"atmos_out",    6, "hours", 1, "days", "time",
 #diagnostic field entries. 
 # quantities needed for plevel interpolation,
- "dynamics",        "bk",         "bk",             "atmos_4xdaily",    "all", .false., "none", 2,
- "dynamics",        "pk",         "pk",             "atmos_4xdaily",    "all", .false., "none", 2,
- "dynamics",        "ps",         "ps",             "atmos_4xdaily",    "all", .false., "none", 2,
+ "dynamics",        "bk",         "bk",             "atmos_out",    "all", .false., "none", 2,
+ "dynamics",        "pk",         "pk",             "atmos_out",    "all", .false., "none", 2,
+ "dynamics",        "ps",         "ps",             "atmos_out",    "all", .false., "none", 2,
+ "dynamics",        "height",     "z",              "atmos_out",    "all", .false., "none", 2
 # dynamics variables
- "dynamics",        "ucomp",      "ucomp",          "atmos_4xdaily",    "all", .false., "none", 2,
- "dynamics",        "vcomp",      "vcomp",          "atmos_4xdaily",    "all", .false., "none", 2,
- "dynamics",        "temp",       "temp",           "atmos_4xdaily",    "all", .false., "none", 2,
- "dynamics",        "sphum",      "sphum",          "atmos_4xdaily",    "all", .false., "none", 2,
-# moisture variables
-  "moist",          "precip",     "precip",         "atmos_4xdaily",    "all", .false., "none", 2,
+ "dynamics",        "ucomp",      "u",              "atmos_out",    "all", .false., "none", 2,
+ "dynamics",        "vcomp",      "v",              "atmos_out",    "all", .false., "none", 2,
+ "dynamics",        "temp",       "temp",           "atmos_out",    "all", .false., "none", 2,
+# gravity wave variables
+ "msgwam",         "gw_flux_x",  "gw_flux_x",      "atmos_out",    "all", .false., "none", 2,
+ "msgwam",         "gw_flux_y",  "gw_flux_y",      "atmos_out",    "all", .false., "none", 2,
+ "msgwam",         "gw_accel_x", "gw_accel_x",     "atmos_out",    "all", .false., "none", 2,
+ "msgwam",         "gw_accel_y", "gw_accel_y",     "atmos_out",    "all", .false., "none", 2,
+
 #=============================================================================================
 #
 #  FORMATS FOR FILE ENTRIES (not all input values are used)

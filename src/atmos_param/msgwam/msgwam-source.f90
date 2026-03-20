@@ -12,7 +12,7 @@ use msgwam_constants_mod, only: boundary_flux_ex, boundary_flux_tr, cp_max, &
                                 cp_width_ex, cp_width_tr, dr_ghost, dr_source, &
                                 epsilon, equal_flux, f2, i_max, j_max, &
                                 lat_tropics, n_max, n_source, print_prune_diag, &
-                                prune_mode, q_max, source_dlat, T_hat_source
+                                prune_mode, q_max, source_dlat, T_hat_source, is_stochastic
 use msgwam_rays_mod,      only: delete_ray, get_cg_r, get_dm, get_m, t_ray
 use msgwam_utils_mod,     only: get_interp_coeffs, locate
 
@@ -22,7 +22,7 @@ private
 public LONG_KIND, check_source, init_source, r_source, &
     t_prune_diag
 
-logical :: is_stochastic
+! logical :: is_stochastic
 integer :: n_launches, n_per_dir
 real :: omega_hat_source
 
@@ -123,7 +123,7 @@ subroutine init_source(lat_bounds)
 
     n_per_dir = n_source / 4
     omega_hat_source = 2 * PI / T_hat_source
-    is_stochastic = epsilon < 1.
+    ! is_stochastic = epsilon < 1.
 
     allocate(is_extrinsic(j_max))
     allocate(r_source(j_max))
