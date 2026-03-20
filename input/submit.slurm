@@ -39,5 +39,8 @@ for yy in $(seq -f "%02g" 1 $N_YEARS); do
     mv RESTART/* INPUT
 done
 
-module load cdo/2.5.0
-cdo -zonmean -timselmean,28, -selname,u -mergetime ??/atmos_out.nc qbo-weekly.nc
+cdo -zonmean \
+    -timselmean,28 \
+    -selname,u \
+    -mergetime ??/atmos_out.nc \
+    weekly-RUN_NAME.nc
